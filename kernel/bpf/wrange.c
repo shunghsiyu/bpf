@@ -3,6 +3,37 @@
 
 #define WRANGE32(_s, _e) ((struct wrange32) {.start = _s, .end = _e})
 
+struct wrange32 wrange32_from_min_max(s32 s32_min, s32 s32_max,
+				      u32 u32_min, u32 u32_max)
+{
+	u32 start, end, ulen, slen;
+
+	ulen = u32_max - u32_min;
+	slen = (u32)s32_max - (u32)s32_min;
+
+	/* The assumption here is that only one of the two s32_{min,max} and
+	 * u32_{min,max} ranges are useful at a time. So we just need to use
+	 * the range that has a tighter bound.
+	 */
+	if (ulen <= slen) {
+		start = u32_min;
+		end = u32_max;
+	} else {
+		start = s32_min;
+		end = s32_max;
+	}
+	return WRANGE32(start, end);
+}
+
+void wrange32_to_min_max(struct wrange32 w, s32 *s32_min, s32 *s32_max,
+			 u32 *u32_min, u32 *u32_max)
+{
+	*s32_min = wrange32_smin(w);
+	*s32_max = wrange32_smax(w);
+	*u32_min = wrange32_umin(w);
+	*u32_max = wrange32_umax(w);
+}
+
 struct wrange32 wrange32_add(struct wrange32 a, struct wrange32 b)
 {
 	u32 a_len = a.end - a.start;
