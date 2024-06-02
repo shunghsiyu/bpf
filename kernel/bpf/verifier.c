@@ -27,6 +27,7 @@
 #include <linux/module.h>
 #include <linux/cpumask.h>
 #include <linux/bpf_mem_alloc.h>
+#include <linux/tval.h>
 #include <net/xdp.h>
 #include <linux/trace_events.h>
 #include <linux/kallsyms.h>
@@ -13737,46 +13738,6 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env,
 	return 0;
 }
 
-static void scalar32_min_max_add(struct bpf_reg_state *dst_reg,
-				 struct bpf_reg_state *src_reg)
-{
-	s32 *dst_smin = &dst_reg->val.s32_min;
-	s32 *dst_smax = &dst_reg->val.s32_max;
-	u32 *dst_umin = &dst_reg->val.u32_min;
-	u32 *dst_umax = &dst_reg->val.u32_max;
-
-	if (check_add_overflow(*dst_smin, src_reg->val.s32_min, dst_smin) ||
-	    check_add_overflow(*dst_smax, src_reg->val.s32_max, dst_smax)) {
-		*dst_smin = S32_MIN;
-		*dst_smax = S32_MAX;
-	}
-	if (check_add_overflow(*dst_umin, src_reg->val.u32_min, dst_umin) ||
-	    check_add_overflow(*dst_umax, src_reg->val.u32_max, dst_umax)) {
-		*dst_umin = 0;
-		*dst_umax = U32_MAX;
-	}
-}
-
-static void scalar_min_max_add(struct bpf_reg_state *dst_reg,
-			       struct bpf_reg_state *src_reg)
-{
-	s64 *dst_smin = &dst_reg->val.smin;
-	s64 *dst_smax = &dst_reg->val.smax;
-	u64 *dst_umin = &dst_reg->val.umin;
-	u64 *dst_umax = &dst_reg->val.umax;
-
-	if (check_add_overflow(*dst_smin, src_reg->val.smin, dst_smin) ||
-	    check_add_overflow(*dst_smax, src_reg->val.smax, dst_smax)) {
-		*dst_smin = S64_MIN;
-		*dst_smax = S64_MAX;
-	}
-	if (check_add_overflow(*dst_umin, src_reg->val.umin, dst_umin) ||
-	    check_add_overflow(*dst_umax, src_reg->val.umax, dst_umax)) {
-		*dst_umin = 0;
-		*dst_umax = U64_MAX;
-	}
-}
-
 static void scalar32_min_max_sub(struct bpf_reg_state *dst_reg,
 				 struct bpf_reg_state *src_reg)
 {
@@ -14352,9 +14313,7 @@ static int adjust_scalar_min_max_vals(struct bpf_verifier_env *env,
 	 */
 	switch (opcode) {
 	case BPF_ADD:
-		scalar32_min_max_add(dst_reg, &src_reg);
-		scalar_min_max_add(dst_reg, &src_reg);
-		dst_reg->val.var_off = tnum_add(dst_reg->val.var_off, src_reg.val.var_off);
+		tval_add(&dst_reg->val, &src_reg.val);
 		break;
 	case BPF_SUB:
 		scalar32_min_max_sub(dst_reg, &src_reg);
@@ -15599,8 +15558,7 @@ static void sync_linked_regs(struct bpf_verifier_state *vstate, struct bpf_reg_s
 			reg->off = saved_off;
 			reg->subreg_def = saved_subreg_def;
 
-			scalar32_min_max_add(reg, &fake_reg);
-			scalar_min_max_add(reg, &fake_reg);
+			tval_add(&reg->val, &fake_reg.val);
 			reg->val.var_off = tnum_add(reg->val.var_off, fake_reg.val.var_off);
 		}
 	}
