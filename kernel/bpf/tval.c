@@ -6,7 +6,7 @@
 #include <linux/limits.h>
 
 static void scalar32_min_max_add(struct tval *dst_val,
-				 struct tval *src_val)
+				 const struct tval *src_val)
 {
 	s32 *dst_smin = &dst_val->s32_min;
 	s32 *dst_smax = &dst_val->s32_max;
@@ -25,8 +25,8 @@ static void scalar32_min_max_add(struct tval *dst_val,
 	}
 }
 
-static void scalar_min_max_add(struct tval *dst_tval,
-			       struct tval *src_tval)
+static void scalar_min_max_add(struct tval *dst_val,
+			       const struct tval *src_val)
 {
 	s64 *dst_smin = &dst_val->smin;
 	s64 *dst_smax = &dst_val->smax;
@@ -45,7 +45,7 @@ static void scalar_min_max_add(struct tval *dst_tval,
 	}
 }
 
-void tval_add(struct tval *dst_val, struct tval *src_val)
+void tval_add(struct tval *dst_val, const struct tval *src_val)
 {
 	scalar32_min_max_add(dst_val, src_val);
 	scalar_min_max_add(dst_val, src_val);
