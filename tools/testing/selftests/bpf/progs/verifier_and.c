@@ -110,4 +110,62 @@ l0_%=:	r0 = 0;						\
 	: __clobber_all);
 }
 
+SEC("socket")
+__description("[-1,0] range vs negative constant")
+__success __success_unpriv __retval(0)
+__naked void and_mixed_range_vs_neg_const(void)
+{
+	/*
+	 * Test signed range propagation through BPF_AND with the
+	 * compiler-generated pattern: sign-extend, then AND with negative.
+	 *
+	 * After "r0 s>>= 63", r0 is in range [-1, 0].
+	 * After "r0 &= -13", the actual values are {-13, 0}, but the
+	 * verifier uses s64_and_min_bound(-13) = -16 as a safe lower bound.
+	 * So we verify the range is within [-16, 0], which is sufficient.
+	 */
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	r0 <<= 63;					\
+	r0 s>>= 63; /* r0 = [-1, 0] */			\
+	r1 = -13;					\
+	r0 &= r1;   /* r0 = {-13, 0}, verifier infers [-16, 0] */ \
+	r2 = 0;						\
+	if r0 s> r2 goto l0_%=;	/* check r0 <= 0 */	\
+	r2 = -16;					\
+	if r0 s< r2 goto l0_%=;	/* check r0 >= -16 */	\
+	r0 = 0;						\
+	exit;						\
+l0_%=:  r1 = *(u32*)(r1 + 0);	/* invalid deref */ 	\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+SEC("socket")
+__description("32-bit [-1,0] range vs negative constant")
+__success __success_unpriv __retval(0)
+__naked void and32_mixed_range_vs_neg_const(void)
+{
+	/* 32-bit version of and_mixed_range_vs_neg_const() above */
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	w0 <<= 31;					\
+	w0 s>>= 31; /* w0 = [-1, 0] */			\
+	w1 = -13;					\
+	w0 &= w1;   /* w0 = {-13, 0}, verifier infers [-16, 0] */ \
+	w2 = 0;						\
+	if w0 s> w2 goto l0_%=;	/* check w0 <= 0 */	\
+	w2 = -16;					\
+	if w0 s< w2 goto l0_%=;	/* check w0 >= -16 */	\
+	r0 = 0;						\
+	exit;						\
+l0_%=:  r1 = *(u32*)(r1 + 0);	/* invalid deref */	\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
 char _license[] SEC("license") = "GPL";
