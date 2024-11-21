@@ -30,6 +30,7 @@
 #include <net/xdp.h>
 #include <linux/trace_events.h>
 #include <linux/kallsyms.h>
+#include <linux/wrange.h>
 
 #include "disasm.h"
 
@@ -13737,21 +13738,22 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env,
 static void scalar32_min_max_add(struct bpf_reg_state *dst_reg,
 				 struct bpf_reg_state *src_reg)
 {
-	s32 *dst_smin = &dst_reg->s32_min_value;
-	s32 *dst_smax = &dst_reg->s32_max_value;
-	u32 *dst_umin = &dst_reg->u32_min_value;
-	u32 *dst_umax = &dst_reg->u32_max_value;
+	struct wrange32 src_range, dst_range;
 
-	if (check_add_overflow(*dst_smin, src_reg->s32_min_value, dst_smin) ||
-	    check_add_overflow(*dst_smax, src_reg->s32_max_value, dst_smax)) {
-		*dst_smin = S32_MIN;
-		*dst_smax = S32_MAX;
-	}
-	if (check_add_overflow(*dst_umin, src_reg->u32_min_value, dst_umin) ||
-	    check_add_overflow(*dst_umax, src_reg->u32_max_value, dst_umax)) {
-		*dst_umin = 0;
-		*dst_umax = U32_MAX;
-	}
+	src_range = wrange32_from_min_max(src_reg->s32_min_value,
+					  src_reg->s32_max_value,
+					  src_reg->u32_min_value,
+					  src_reg->u32_max_value);
+	dst_range = wrange32_from_min_max(dst_reg->s32_min_value,
+					  dst_reg->s32_max_value,
+					  dst_reg->u32_min_value,
+					  dst_reg->u32_max_value);
+
+	wrange32_to_min_max(wrange32_add(dst_range, src_range),
+			    &dst_reg->s32_min_value,
+			    &dst_reg->s32_max_value,
+			    &dst_reg->u32_min_value,
+			    &dst_reg->u32_max_value);
 }
 
 static void scalar_min_max_add(struct bpf_reg_state *dst_reg,
