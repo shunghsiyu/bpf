@@ -2354,6 +2354,55 @@ static int reg_bounds_sanity_check(struct bpf_verifier_env *env,
 		}
 	}
 
+	/* check that one of the range is reset when sign or unsign bound is
+	 * crossed.
+	 *
+	 * if no bounds are crossed, then the two values should agree. These
+	 * condition needs to hold true otherwise we can't unify singed and
+	 * unsigned bounds.
+	 */
+	if (reg->smin_value < 0 && reg->smax_value >= 0) {
+		/* unsign-bound crossed */
+		if (reg->umin_value != 0 || reg->umax_value != U64_MAX) {
+			msg = "unsign-bound crossing but umin/umax is not unset";
+			goto out;
+		}
+	} else if (reg->umin_value <= (u64)S64_MAX && reg->umax_value >= (u64)S64_MIN) {
+		/* sign-bound crossed */
+		if (reg->smin_value != S64_MIN || reg->smax_value != S64_MAX) {
+		    msg = "sign-bound crossing but smin/smax is not unset";
+		    goto out;
+		}
+	} else {
+		/* neither unsigned nor sign bound crossed */
+		if ((reg->umin_value != (u64)reg->smin_value) ||
+		    (reg->umax_value != (u64)reg->smax_value)) {
+		    msg = "no bound crossing but values disagrees";
+		    goto out;
+		}
+	}
+
+	if (reg->s32_min_value < 0 && reg->s32_max_value >= 0) {
+		/* 32-bit unsign-bound crossed */
+		if (reg->u32_min_value != 0 || reg->u32_max_value != U32_MAX) {
+			msg = "32-bit unsign-bound crossing but u32_min/u32_max is not unset";
+			goto out;
+		}
+	} else if (reg->u32_min_value <= (u32)S32_MAX && reg->u32_max_value >= (u32)S32_MIN) {
+		/* 32-bit sign-bound crossed */
+		if (reg->s32_min_value != S32_MIN || reg->s32_max_value != S32_MAX) {
+		    msg = "32-bit sign-bound crossing but s32_min/s32_max is not unset";
+		    goto out;
+		}
+	} else {
+		/* neither 32-bit unsigned nor sign bound crossed */
+		if ((reg->u32_min_value != (u32)reg->s32_min_value) ||
+		    (reg->u32_max_value != (u32)reg->s32_max_value)) {
+		    msg = "no 32-bit bound crossing but values disagrees";
+		    goto out;
+		}
+	}
+
 	return 0;
 out:
 	verbose(env, "REG INVARIANTS VIOLATION (%s): %s u64=[%#llx, %#llx] "
