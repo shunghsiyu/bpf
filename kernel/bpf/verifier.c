@@ -13735,10 +13735,31 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env,
 	return 0;
 }
 
-static void scalar32_min_max_add(struct bpf_reg_state *dst_reg,
+static void scalar32_min_max_add(struct bpf_verifier_env *env,
+				 struct bpf_reg_state *dst_reg,
 				 struct bpf_reg_state *src_reg)
 {
+	u32 orig_umin, orig_umax, result_umin, result_umax;
+	s32 orig_smin, orig_smax, result_smin, result_smax;
 	struct wrange32 src_range, dst_range;
+
+	/* Preserve original dst_reg values to be printed later */
+	orig_umin = dst_reg->u32_min_value;
+	orig_umax = dst_reg->u32_max_value;
+	orig_smin = dst_reg->s32_min_value;
+	orig_smax = dst_reg->s32_max_value;
+
+	/* First calculate the result the old way */
+	if (check_add_overflow(dst_reg->s32_min_value, src_reg->s32_min_value, &result_smin) ||
+	    check_add_overflow(dst_reg->s32_max_value, src_reg->s32_max_value, &result_smax)) {
+		result_smin = S32_MIN;
+		result_smax = S32_MAX;
+	}
+	if (check_add_overflow(dst_reg->u32_min_value, src_reg->u32_min_value, &result_umin) ||
+	    check_add_overflow(dst_reg->u32_max_value, src_reg->u32_max_value, &result_umax)) {
+		result_umin = 0;
+		result_umax = U32_MAX;
+	}
 
 	src_range = wrange32_from_min_max(src_reg->s32_min_value,
 					  src_reg->s32_max_value,
@@ -13754,6 +13775,33 @@ static void scalar32_min_max_add(struct bpf_reg_state *dst_reg,
 			    &dst_reg->s32_max_value,
 			    &dst_reg->u32_min_value,
 			    &dst_reg->u32_max_value);
+
+	if (!env)
+		return;
+	if ((dst_reg->u32_min_value != result_umin) ||
+	    (dst_reg->u32_max_value != result_umax) ||
+	    (dst_reg->s32_min_value != result_smin) ||
+	    (dst_reg->s32_max_value != result_smax))
+		verbose(env,
+			"SCALAR32_MIN_MAX_ADD VIOLATION:"
+			" dst(u32=[%#x, %#x] s32=[%#x, %#x])"
+			" src(u32=[%#x, %#x] s32=[%#x, %#x])"
+			" u32_min(actual=%#x expected=%#x)"
+			" u32_max(actual=%#x expected=%#x)"
+			" s32_min(actual=%#x expected=%#x)"
+			" s32_max(actual=%#x expected=%#x)"
+			"\n",
+			/* dst_reg */
+			orig_umin, orig_umax,
+			orig_smin, orig_smax,
+			/* src_reg */
+			src_reg->u32_min_value, src_reg->u32_max_value,
+			src_reg->s32_min_value, src_reg->s32_max_value,
+			/* expected vs actual */
+			dst_reg->u32_min_value, result_umin,
+			dst_reg->u32_max_value, result_umax,
+			dst_reg->s32_min_value, result_smin,
+			dst_reg->s32_max_value, result_smax);
 }
 
 static void scalar_min_max_add(struct bpf_reg_state *dst_reg,
@@ -14351,7 +14399,7 @@ static int adjust_scalar_min_max_vals(struct bpf_verifier_env *env,
 	 */
 	switch (opcode) {
 	case BPF_ADD:
-		scalar32_min_max_add(dst_reg, &src_reg);
+		scalar32_min_max_add(env, dst_reg, &src_reg);
 		scalar_min_max_add(dst_reg, &src_reg);
 		dst_reg->var_off = tnum_add(dst_reg->var_off, src_reg.var_off);
 		break;
@@ -15598,7 +15646,7 @@ static void sync_linked_regs(struct bpf_verifier_state *vstate, struct bpf_reg_s
 			reg->off = saved_off;
 			reg->subreg_def = saved_subreg_def;
 
-			scalar32_min_max_add(reg, &fake_reg);
+			scalar32_min_max_add(NULL, reg, &fake_reg);
 			scalar_min_max_add(reg, &fake_reg);
 			reg->var_off = tnum_add(reg->var_off, fake_reg.var_off);
 		}
