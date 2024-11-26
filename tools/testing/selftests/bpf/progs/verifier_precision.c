@@ -145,7 +145,7 @@ __naked int state_loop_first_last_equal(void)
 }
 
 SEC("?raw_tp")
-__failure
+__success __log_level(2)
 __naked int non_r10_spill_fill(void)
 {
 	asm volatile (
