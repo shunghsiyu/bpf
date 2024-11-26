@@ -4,6 +4,20 @@
 #include <bpf/bpf_helpers.h>
 #include "bpf_misc.h"
 
+#define MAX_ENTRIES 11
+
+struct test_val {
+	unsigned int index;
+	int foo[MAX_ENTRIES];
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, int);
+	__type(value, struct test_val);
+} map_array_48b SEC(".maps");
+
 SEC("?raw_tp")
 __success __log_level(2)
 __msg("mark_precise: frame0: regs=r2 stack= before 3: (bf) r1 = r10")
@@ -128,6 +142,37 @@ __naked int state_loop_first_last_equal(void)
 		"exit;"
 		::: __clobber_common
 	);
+}
+
+SEC("?raw_tp")
+__failure
+__naked int non_r10_spill_fill(void)
+{
+	asm volatile (
+		"r2 = 0;"
+		"r2 = -r2;" /* negation makes r2 unknown to verifier */
+		"r3 = r10;"
+		"if r2 != 0 goto l0_%=;"
+		"r1 = 20;" /* Safe offset */
+		"*(u64 *)(r3 - 120) = r1;"
+		"goto l1_%=;"
+	"l0_%=:"
+		"r1 = 0xdead;" /* Unsafe offset */
+		"*(u64 *)(r3 - 120) = r1;"
+	"l1_%=:"
+		"r6 = *(u64 *)(r3 - 120);"
+		"r1 = %[map_array_48b] ll;"
+		"r2 = 0;"
+		"call %[bpf_map_lookup_elem];"
+		"if r0 == 0 goto l2_%=;"
+		"r7 = r0;"
+		"r7 += r6;"
+	"l2_%=:"
+		"exit;"
+		:
+		: __imm_addr(map_array_48b),
+		  __imm(bpf_map_lookup_elem)
+		: __clobber_all);
 }
 
 char _license[] SEC("license") = "GPL";
