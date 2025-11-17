@@ -33,17 +33,37 @@ struct wrange32 {
 	u32 end;
 };
 
+/* Empty range: Use start=1, end=0 (non-wrapping) as sentinel value */
+#define WRANGE32_EMPTY ((struct wrange32) {.start = 1, .end = 0})
+
+/* Full range: All possible u32 values */
+#define WRANGE32_FULL ((struct wrange32) {.start = U32_MIN, .end = U32_MAX})
+
 /* Create wrange32 from bpf_reg_state's s32_min/s32_max/u32_min/u32_max */
 struct wrange32 wrange32_from_min_max(s32 s32_min, s32 s32_max,
 		                      u32 u32_min, u32 u32_max);
 /* Turn wrange32 back into s32_min/s32_max/u32_min/u32_max */
 void wrange32_to_min_max(struct wrange32 w, s32 *s32_min, s32 *s32_max,
 			 u32 *u32_min, u32 *u32_max);
+
+/* Arithmetic operations */
 struct wrange32 wrange32_add(struct wrange32 a, struct wrange32 b);
 struct wrange32 wrange32_sub(struct wrange32 a, struct wrange32 b);
 struct wrange32 wrange32_mul(struct wrange32 a, struct wrange32 b);
 
+/* Set operations */
+struct wrange32 wrange32_intersect(struct wrange32 a, struct wrange32 b);
+struct wrange32 wrange32_union(struct wrange32 a, struct wrange32 b);
+
+static inline bool wrange32_is_empty(struct wrange32 w) {
+	/* Empty range is represented as start=1, end=0 (non-wrapping) */
+	return w.start == 1 && w.end == 0;
+}
+
 static inline bool wrange32_uwrapping(struct wrange32 w) {
+	/* Don't treat empty range as wrapping */
+	if (wrange32_is_empty(w))
+		return false;
 	return w.end < w.start;
 }
 
