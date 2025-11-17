@@ -1,0 +1,208 @@
+From 7cbcc9f0e6931fb79b321cf6993fcf86bbc32fe1 Mon Sep 17 00:00:00 2001
+From: Shung-Hsi Yu <shung-hsi.yu@suse.com>
+Date: Tue, 7 Nov 2023 16:36:24 +0800
+Subject: [PATCH 2/9] Lift the contrain requiring start <= end
+
+Lifting the restriction that requires start/umin <= end/umax can allow
+us to track range that wraps around in the u32 range, e.g.
+{0xffffffff, 0, 1} can be tracked with start=0xffffffff and end=1.
+This makes retrieving umin/umax slightly more complicated, and requires
+checking whether wrapping occurs in the u32 range; wrange32_uwrapping()
+helper is introduced to simplify the check.
+
+Additional z3Py checks are added to make sure the new reasoning around
+umin/umax for the u32 wrapping case is correct.
+
+Signed-off-by: Shung-Hsi Yu <shung-hsi.yu@suse.com>
+---
+ include/linux/wrange.h                       | 46 +++++++++---
+ tools/testing/selftests/bpf/formal/wrange.py | 77 +++++++++++++++++---
+ 2 files changed, 102 insertions(+), 21 deletions(-)
+
+diff --git a/include/linux/wrange.h b/include/linux/wrange.h
+index e4708a4cb6b0..c626ba63f32a 100644
+--- a/include/linux/wrange.h
++++ b/include/linux/wrange.h
+@@ -1,28 +1,54 @@
+ /* SPDX-License-Identifier: GPL-2.0-only */
+ /* wrange: wrapped range
++ *
++ * A wrange tracks knowledge about a range of possible values using two bound,
++ * start and end. The possible value could be any of the values (inclusively)
++ * between start and end, and this can work even when end < start. Below is
++ * some pseudo code for inferring the possible values within the 32-bit version
++ * of wrange:
++ *
++ *   bool[U32_MAX] possible_values = { false };
++ *   for (u32 i = start; i < end; i++)
++ *   	possible_values[i] = true;
++ *
++ * For an intuitive visualization of wrange, one can imagine the 32-bit numeric
++ * domain as a circle, where 0 sits at 6 o'clock, and the number increment as
++ * we go in clockwise direction. Thus 2^30 sits at 9 o'clock, 2^31 at 12
++ * o'clock, 2^31+2^30 at 3 o'clock, so on and so forth. This place 2^32-1 just
++ * besides 0, one position away in the counter-clockwise direction. With this
++ * visualization wrange can be seen as a line drawn on the circle, starting at
++ * start, and goes in clockwise direction until it reaches end, where all the
++ * numbers on such line is considered to be a possible value represented by
++ * such wrange.
+  */
+ #ifndef _LINUX_WRANGE_H
+ #define _LINUX_WRANGE_H
+ 
+ #include <linux/types.h>
++#include <linux/limits.h>
+ 
+ struct wrange32 {
+-	/* Start with a usual u32 min/max.
+-	 *
+-	 * Requiring umin/start <= umax/end, and cannot be use to track s32
+-	 * range.
+-	 */
+-	u32 start; /* umin */
+-	u32 end; /* umax */
++	/* Allow end < start */
++	u32 start;
++	u32 end;
+ };
+ 
+-/* Helper functions that will be required later */
++static inline bool wrange32_uwrapping(struct wrange32 w) {
++	return w.end < w.start;
++}
++
+ static inline u32 wrange32_umin(struct wrange32 w) {
+-	return w.start;
++	if (wrange32_uwrapping(w))
++		return U32_MIN;
++	else
++		return w.start;
+ }
+ 
+ static inline u32 wrange32_umax(struct wrange32 w) {
+-	return w.end;
++	if (wrange32_uwrapping(w))
++		return U32_MAX;
++	else
++		return w.end;
+ }
+ 
+ #endif /* _LINUX_WRANGE_H */
+diff --git a/tools/testing/selftests/bpf/formal/wrange.py b/tools/testing/selftests/bpf/formal/wrange.py
+index 8836f4cbbedb..a2b1b083d291 100755
+--- a/tools/testing/selftests/bpf/formal/wrange.py
++++ b/tools/testing/selftests/bpf/formal/wrange.py
+@@ -21,22 +21,31 @@ class Wrange(abc.ABC):
+         assert(self.end.size() == self.SIZE)
+ 
+     def wellformed(self):
+-        # start <= end
+-        return ULE(self.start, self.end)
++        # allow end < start, so any start/end combination is valid
++        return BoolVal(True)
++
++    @property
++    def uwrapping(self):
++        # unsigned comparison, (u32)end < (u32)start
++        return ULT(self.end, self.start)
+ 
+     @property
+     def umin(self):
+-        return self.start
++        return If(self.uwrapping, BitVecVal(0, bv=self.SIZE), self.start)
+ 
+     @property
+     def umax(self):
+-        return self.end
++        return If(self.uwrapping, BitVecVal(2**self.SIZE - 1, bv=self.SIZE), self.end)
+ 
+     # Not used in wrange.c, but helps with checking later
+     def contains(self, val: BitVecRef):
+         assert(val.size() == self.SIZE)
+-        # umin <= val <= umax
+-        return And(ULE(self.umin, val), ULE(val, self.umax))
++        # start <= val <= end
++        nonwrapping_cond = And(ULE(self.start, val), ULE(val, self.end))
++        # 0 <= val <= end or start <= val <= 2**32-1
++        # (omit checking 0 <= val and val <= 2**32-1 since they're always true)
++        wrapping_cond = Or(ULE(val, self.end), ULE(self.start, val))
++        return If(self.uwrapping, wrapping_cond, nonwrapping_cond)
+ 
+ 
+ class Wrange32(Wrange):
+@@ -115,13 +124,59 @@ def main():
+     # Right now our semantic doesn't allow umax/end < umin/start
+     w3 = Wrange32('w3', start=BitVecVal32(2), end=BitVecVal32(0))
+     print(f'\nGiven w3 start={w3.start} end={w3.end}')
+-    print('\nChecking w3 is NOT wellformed')
++    print('\nChecking w3 is also wellformed')
+     prove(
+-        Not(w3.wellformed()),
++        w3.wellformed(),
++    )
++    print('\nChecking w3.umin is 0')
++    prove(
++        w3.umin == BitVecVal32(0),
++    )
++    print('\nChecking w3.umax is 2**32-1')
++    prove(
++        w3.umax == BitVecVal32(2**32 - 1),
++    )
++    print('\nChecking that w3 contains 0')
++    prove(
++        w3.contains(BitVecVal32(0)),
++    )
++    print('\nChecking that w3 does NOT contain 1')
++    prove(
++        Not(w3.contains(BitVecVal32(1))),
++    )
++    print('\nChecking that w3 is a union set of ({0} U {2..2**32-1})')
++    prove(
++        w3.contains(x) == Or(x == BitVecVal32(0), And(ULE(2, x), ULE(x, 2**32-1))),
+     )
+ 
+-    # General checks that does not assum the value of start/end, except that it
+-    # meets the requirement that start <= end.
++    w4 = Wrange32('w4', start=BitVecVal32(2**32 - 1), end=BitVecVal32(1))
++    print(f'\nGiven w4 start={w4.start} end={w4.end}')
++    print('\nChecking w4 is also wellformed')
++    prove(
++        w4.wellformed(),
++    )
++    print('\nChecking w4.umin is 0')
++    prove(
++        w4.umin == BitVecVal32(0),
++    )
++    print('\nChecking w4.umax is 2**32-1')
++    prove(
++        w4.umax == BitVecVal32(2**32 - 1),
++    )
++    print('\nChecking that w4 contains 0')
++    prove(
++        w4.contains(BitVecVal32(0)),
++    )
++    print('\nChecking that w4 does contain 2**32-1')
++    prove(
++        w4.contains(BitVecVal32(2**32-1)),
++    )
++    print('\nChecking that w4 is a union set of ({2**32-1} U {0..1})')
++    prove(
++        w4.contains(x) == Or(x == BitVecVal32(2**32-1), x == BitVecVal32(0), x == BitVecVal32(1)),
++    )
++
++    # General checks for umin/umax
+     w = Wrange32('w') # Given a Wrange32 called w
+     x = BitVec32('x') # And an 32-bit integer x (redeclared for clarity)
+     print(f'\nGiven any possible Wrange32 called w, and any possible 32-bit integer called x')
+@@ -129,7 +184,7 @@ def main():
+     prove(
+         Implies(
+             And(
+-                w.wellformed(),
++                w.wellformed(), # Always true, but keeping it for now
+                 w.contains(x),
+             ),
+             ULE(w.umin, x),
+-- 
+2.51.1
+

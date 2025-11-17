@@ -1,0 +1,136 @@
+From 117a3bbf387847a11c959cdb2777f9ccb5d29385 Mon Sep 17 00:00:00 2001
+From: Shung-Hsi Yu <shung-hsi.yu@suse.com>
+Date: Tue, 7 Nov 2023 22:03:02 +0800
+Subject: [PATCH 5/9] Implement wrange32_sub()
+
+Implement wrange32_sub() that takes two wrange32 and compute a new
+wrange32 that contains all possible combinations of difference produced
+by subtracting values in the two wrange32. Simliar to wrange32_add(),
+the implementation can work even when underflow occurs, but when the
+resulting length is too large to track we again fallback to
+start=U32_MIN and end=U32_MAX.
+
+Also add wrange_sub.py that models and check wrange32_sub().
+
+Signed-off-by: Shung-Hsi Yu <shung-hsi.yu@suse.com>
+---
+ include/linux/wrange.h                        |  1 +
+ kernel/bpf/wrange.c                           | 13 ++++
+ .../selftests/bpf/formal/wrange_sub.py        | 72 +++++++++++++++++++
+ 3 files changed, 86 insertions(+)
+ create mode 100755 tools/testing/selftests/bpf/formal/wrange_sub.py
+
+diff --git a/include/linux/wrange.h b/include/linux/wrange.h
+index d7388e03bb9d..c638e06184e8 100644
+--- a/include/linux/wrange.h
++++ b/include/linux/wrange.h
+@@ -34,6 +34,7 @@ struct wrange32 {
+ };
+ 
+ struct wrange32 wrange32_add(struct wrange32 a, struct wrange32 b);
++struct wrange32 wrange32_sub(struct wrange32 a, struct wrange32 b);
+ 
+ static inline bool wrange32_uwrapping(struct wrange32 w) {
+ 	return w.end < w.start;
+diff --git a/kernel/bpf/wrange.c b/kernel/bpf/wrange.c
+index 8cdbc21a51f2..08bb7e129d7f 100644
+--- a/kernel/bpf/wrange.c
++++ b/kernel/bpf/wrange.c
+@@ -15,3 +15,16 @@ struct wrange32 wrange32_add(struct wrange32 a, struct wrange32 b)
+ 	else
+ 		return WRANGE32(a.start + b.start, a.end + b.end);
+ }
++
++struct wrange32 wrange32_sub(struct wrange32 a, struct wrange32 b)
++{
++	u32 a_len = a.end - a.start;
++	u32 b_len = b.end - b.start;
++	u32 new_len = a_len + b_len;
++
++	/* the new start/end pair goes full circle, so any value is possible */
++	if (new_len < a_len || new_len < b_len)
++		return WRANGE32(U32_MIN, U32_MAX);
++	else
++		return WRANGE32(a.start - b.end, a.end - b.start);
++}
+diff --git a/tools/testing/selftests/bpf/formal/wrange_sub.py b/tools/testing/selftests/bpf/formal/wrange_sub.py
+new file mode 100755
+index 000000000000..63abf4d2d978
+--- /dev/null
++++ b/tools/testing/selftests/bpf/formal/wrange_sub.py
+@@ -0,0 +1,72 @@
++#!/usr/bin/env python3
++from z3 import *
++from wrange import *
++
++
++def wrange_sub(a: Wrange, b: Wrange):
++    wrange_class = type(a)
++    assert(a.SIZE == b.SIZE)
++
++    new_length = a.length + b.length
++    too_wide = Or(ULT(new_length, a.length), ULT(new_length, b.length))
++    new_start = If(too_wide, BitVecVal(0, a.SIZE), a.start - b.end)
++    new_end = If(too_wide, BitVecVal(2**a.SIZE-1, a.SIZE), a.end - b.start)
++    return wrange_class(f'{a.name} - {b.name}', new_start, new_end)
++
++
++def main():
++    x = BitVec32('x')
++    w = wrange_sub(
++        # {1, 2, 3}
++        Wrange32('w1', start=BitVecVal32(1), end=BitVecVal32(3)),
++        # - {0}
++        Wrange32('w2', start=BitVecVal32(0), end=BitVecVal32(0)),
++    )   # = {1, 2, 3}
++    print('Checking {1, 2, 3} - {0} = {1, 2, 3}')
++    prove(               # 1 <= x <= 3
++        w.contains(x) == And(1 <= x, x <= 3)
++    )
++
++    w = wrange_sub(
++        # {-1}
++        Wrange32('w1', start=BitVecVal32(-1), end=BitVecVal32(-1)),
++        # - {0, 1, 2}
++        Wrange32('w2', start=BitVecVal32(0), end=BitVecVal32(2)),
++    )   # = {-3, -2, -1}
++    print('\nChecking {-1} - {0, 1, 2} = {-3, -2, -1}')
++    prove(               # -3 <= x <= -1
++        w.contains(x) == And(-3 <= x, x <= -1),
++    )
++
++    # A general check to make sure wrange_sub() is sound
++    w1 = Wrange32('w1')
++    w2 = Wrange32('w2')
++    w = wrange_sub(w1, w2)
++    x = BitVec32('x')
++    y = BitVec32('y')
++    premise = And(
++        w1.wellformed(),
++        w2.wellformed(),
++        w1.contains(x),
++        w2.contains(y),
++    )
++    # Suppose we have a wrange32 called w1 that contains the 32-bit integer x
++    # (where x can be any possible value contained inside w1), and another
++    # wrange32 called w2 that similarly contains 32-bit integer y.
++    #
++    # The difference of w1 and w2 calculated from wrange_sub(w1, w2), called w,
++    # should _always_ contains the difference of x and y, no matter what.
++    print('\nChecking that if w1.contains(x) and w2.contains(y), then wrange32_sub(w1, w2).contains(x-y)')
++    print('(note: this may take awhile)')
++    prove(
++        Implies(
++            premise,
++            And(
++                w.contains(x - y),
++                w.wellformed(),
++            ),
++        )
++    )
++
++if __name__ == '__main__':
++    main()
+-- 
+2.51.1
+

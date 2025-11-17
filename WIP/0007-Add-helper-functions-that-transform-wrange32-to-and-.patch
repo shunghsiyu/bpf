@@ -1,0 +1,83 @@
+From e9f081ef5e7c3e473ce0053cc96e23273d2a1d59 Mon Sep 17 00:00:00 2001
+From: Shung-Hsi Yu <shung-hsi.yu@suse.com>
+Date: Wed, 8 Nov 2023 12:05:44 +0800
+Subject: [PATCH 7/9] Add helper functions that transform wrange32 to and from
+ smin/smax/umin/umax
+
+To check how wrange32 logic interacts with current verifier codebase, it
+is necessary to try integrating it as soon as possible in order to take
+advantange of the selftests we have. One way for this to be done is by
+adding a helper function that takes smin/smax/umin/umax from
+bpf_reg_state and turn them into wrange32, then do calculation in
+wrange32_{add,sub,mul} instead of scalar32_min_max_{add,sub,mul}, and
+turn the resulting wrange32 back into smin/smax/umin/umax with another
+helper function.
+
+Signed-off-by: Shung-Hsi Yu <shung-hsi.yu@suse.com>
+---
+ include/linux/wrange.h |  6 ++++++
+ kernel/bpf/wrange.c    | 31 +++++++++++++++++++++++++++++++
+ 2 files changed, 37 insertions(+)
+
+diff --git a/include/linux/wrange.h b/include/linux/wrange.h
+index 035c6c6096d3..09e31329046f 100644
+--- a/include/linux/wrange.h
++++ b/include/linux/wrange.h
+@@ -33,6 +33,12 @@ struct wrange32 {
+ 	u32 end;
+ };
+ 
++/* Create wrange32 from bpf_reg_state's s32_min/s32_max/u32_min/u32_max */
++struct wrange32 wrange32_from_min_max(s32 s32_min, s32 s32_max,
++		                      u32 u32_min, u32 u32_max);
++/* Turn wrange32 back into s32_min/s32_max/u32_min/u32_max */
++void wrange32_to_min_max(struct wrange32 w, s32 *s32_min, s32 *s32_max,
++			 u32 *u32_min, u32 *u32_max);
+ struct wrange32 wrange32_add(struct wrange32 a, struct wrange32 b);
+ struct wrange32 wrange32_sub(struct wrange32 a, struct wrange32 b);
+ struct wrange32 wrange32_mul(struct wrange32 a, struct wrange32 b);
+diff --git a/kernel/bpf/wrange.c b/kernel/bpf/wrange.c
+index 4ca253e55743..4ca7a590fb55 100644
+--- a/kernel/bpf/wrange.c
++++ b/kernel/bpf/wrange.c
+@@ -3,6 +3,37 @@
+ 
+ #define WRANGE32(_s, _e) ((struct wrange32) {.start = _s, .end = _e})
+ 
++struct wrange32 wrange32_from_min_max(s32 s32_min, s32 s32_max,
++				      u32 u32_min, u32 u32_max)
++{
++	u32 start, end, ulen, slen;
++
++	ulen = u32_max - u32_min;
++	slen = (u32)s32_max - (u32)s32_min;
++
++	/* The assumption here is that only one of the two s32_{min,max} and
++	 * u32_{min,max} ranges are useful at a time. So we just need to use
++	 * the range that has a tighter bound.
++	 */
++	if (ulen <= slen) {
++		start = u32_min;
++		end = u32_max;
++	} else {
++		start = s32_min;
++		end = s32_max;
++	}
++	return WRANGE32(start, end);
++}
++
++void wrange32_to_min_max(struct wrange32 w, s32 *s32_min, s32 *s32_max,
++			 u32 *u32_min, u32 *u32_max)
++{
++	*s32_min = wrange32_smin(w);
++	*s32_max = wrange32_smax(w);
++	*u32_min = wrange32_umin(w);
++	*u32_max = wrange32_umax(w);
++}
++
+ struct wrange32 wrange32_add(struct wrange32 a, struct wrange32 b)
+ {
+ 	u32 a_len = a.end - a.start;
+-- 
+2.51.1
+

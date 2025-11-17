@@ -1,0 +1,92 @@
+From: Shung-Hsi Yu <shung-hsi.yu@suse.com>
+To: bpf@vger.kernel.org
+Cc: Shung-Hsi Yu <shung-hsi.yu@suse.com>,
+	Andrii Nakryiko <andrii@kernel.org>,
+	Eduard Zingerman <eddyz87@gmail.com>,
+	Yonghong Song <yonghong.song@linux.dev>,
+	Alexei Starovoitov <ast@kernel.org>,
+	Daniel Borkmann <daniel@iogearbox.net>,
+	John Fastabend <john.fastabend@gmail.com>,
+	Paul Chaignon <paul@isovalent.com>
+Subject: [RFC bpf-next v0 0/7] Unifying signed and unsigned min/max tracking
+Date: Wed,  8 Nov 2023 13:46:04 +0800	[thread overview]
+Message-ID: <20231108054611.19531-1-shung-hsi.yu@suse.com> (raw)
+
+This patchset is a proof of concept for previously discussed concept[1]
+of unifying smin/smax with umin/uax for both the 32-bit and 64-bit
+range[2] within bpf_reg_state. This will allow the verifier to track
+both signed and unsiged ranges using just two u32 (for 32-bit range) or
+u64 (for 64-bit range), instead four as we currently do.
+
+The size reduction we gain from this probably isn't very significant.
+The main benefit is in lowering of code _complexity_. The verifier
+currently employs 5 value tracking mechanisms, two for 64-bit range, two
+for 32-bit range, and one tnum that tracks individual bits. Exchanging
+knowledge between all the bound tracking mechanisms requires a
+(theoretical) 20-way synchronization[3]; with signed and unsigned
+unification the verifier will only need 3 value tracking mechanism,
+cutting this down to a 6-way synchronization.
+
+The unification is possible from a theoretical standpoint[4] and there
+exists implementation[5]. The challenge lies in implementing it inside
+the verifier and making sure it fits well with all the logic we have in
+place.
+
+To lower the difficulty, the unified min/max tracking is implemented in
+isolation, and have it correctness checked using model checking. The
+model checking code can be found in this patchset as well, but is not
+meant to be merged since a better method already exists[6].
+
+So far I've managed to implement add/sub/mul operations for unified
+min/max tracking, the next steps are:
+- implement operation that can be used gain knowledge from conditional
+  jump, e.g wrange32_intersect, wrange32_diff
+- implement wrange32_from_min_max and wrange32_to_min_max so we can
+  check whether this PoC works using current selftests
+- implement operations for wrange64, the 64-bit counterpart of wrange32
+- come up with how to exchange knowledge between wrange64 and wrange32
+  (this is likely the most difficult part)
+- think about how to integrate this work in a manageable manner
+
+Feedbacks for either the code, the naming, and/or the commit messages
+are all welcome.
+
+
+1: https://lore.kernel.org/bpf/ZTZxoDJJbX9mrQ9w@u94a/
+2: To make model checking faster I'm only working with the 32-bit ranges
+   for now
+3: Synchronization can goes both ways, e.g. exchanging knowledge in
+   umin/umax from/to tnum count as 2-way. But
+4: https://dl.acm.org/doi/10.1145/2651360
+5: https://github.com/caballa/wrapped-intervals/blob/master/lib/RangeAnalysis/WrappedRange.cpp
+6: https://lore.kernel.org/r/1DA1AC52-6E2D-4CDA-8216-D1DD4648AD55@cs.rutgers.edu
+
+Shung-Hsi Yu (7):
+  Add inital wrange32 definition along with checks for umin/umax
+  Lift the contrain requiring start <= end
+  Support tracking signed min/max
+  Implement wrange32_add()
+  Implement wrange32_sub()
+  Implement wrange32_mul()
+  (WIP) Add helper functions that transform wrange32 to and from
+    smin/smax/umin/umax
+
+ include/linux/wrange.h                        |  61 ++++
+ kernel/bpf/Makefile                           |   3 +-
+ kernel/bpf/wrange.c                           |  61 ++++
+ tools/testing/selftests/bpf/formal/wrange.py  | 274 ++++++++++++++++++
+ .../selftests/bpf/formal/wrange_add.py        |  73 +++++
+ .../selftests/bpf/formal/wrange_mul.py        |  87 ++++++
+ .../selftests/bpf/formal/wrange_sub.py        |  72 +++++
+ 7 files changed, 630 insertions(+), 1 deletion(-)
+ create mode 100644 include/linux/wrange.h
+ create mode 100644 kernel/bpf/wrange.c
+ create mode 100755 tools/testing/selftests/bpf/formal/wrange.py
+ create mode 100755 tools/testing/selftests/bpf/formal/wrange_add.py
+ create mode 100755 tools/testing/selftests/bpf/formal/wrange_mul.py
+ create mode 100755 tools/testing/selftests/bpf/formal/wrange_sub.py
+
+
+base-commit: 856624f12b04a3f51094fa277a31a333ee81cb3f
+-- 
+2.42.0
