@@ -6,23 +6,21 @@
 struct wrange32 wrange32_from_min_max(s32 s32_min, s32 s32_max,
 				      u32 u32_min, u32 u32_max)
 {
-	u32 start, end, ulen, slen;
+	struct wrange32 srange, urange;
 
-	ulen = u32_max - u32_min;
-	slen = (u32)s32_max - (u32)s32_min;
+	/* Create wrange from signed bounds (cast to u32 for storage) */
+	srange = WRANGE32((u32)s32_min, (u32)s32_max);
 
-	/* The assumption here is that only one of the two s32_{min,max} and
-	 * u32_{min,max} ranges are useful at a time. So we just need to use
-	 * the range that has a tighter bound.
+	/* Create wrange from unsigned bounds */
+	urange = WRANGE32(u32_min, u32_max);
+
+	/* Return intersection to get tightest possible range.
+	 * This preserves information from both signed and unsigned bounds,
+	 * unlike the old approach which only picked the tighter one.
+	 * For example, if unsigned says [0, 100] and signed says [50, 75],
+	 * we correctly deduce [50, 75] instead of just picking one.
 	 */
-	if (ulen <= slen) {
-		start = u32_min;
-		end = u32_max;
-	} else {
-		start = s32_min;
-		end = s32_max;
-	}
-	return WRANGE32(start, end);
+	return wrange32_intersect(srange, urange);
 }
 
 void wrange32_to_min_max(struct wrange32 w, s32 *s32_min, s32 *s32_max,
