@@ -23,6 +23,7 @@
 #define S32_MAX		((s32)(U32_MAX >> 1))
 #define S32_MIN		((s32)(-S32_MAX - 1))
 #define U64_MAX		((u64)~0ULL)
+#define U64_MIN		((u64)0)
 #define S64_MAX		((s64)(U64_MAX >> 1))
 #define S64_MIN		((s64)(-S64_MAX - 1))
 

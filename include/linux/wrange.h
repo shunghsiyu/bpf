@@ -110,4 +110,93 @@ static inline s32 wrange32_smax(struct wrange32 w) {
 		return w.end;
 }
 
+/* ========== 64-bit Wrapped Range (wrange64) ========== */
+
+struct wrange64 {
+	/* Allow end < start */
+	u64 start;
+	u64 end;
+};
+
+/* Empty range: Use start=1, end=0 (non-wrapping) as sentinel value */
+#define WRANGE64_EMPTY ((struct wrange64) {.start = 1, .end = 0})
+
+/* Full range: All possible u64 values */
+#define WRANGE64_FULL ((struct wrange64) {.start = U64_MIN, .end = U64_MAX})
+
+/* Create wrange64 from bpf_reg_state's s64_min/s64_max/u64_min/u64_max */
+struct wrange64 wrange64_from_min_max(s64 s64_min, s64 s64_max,
+		                      u64 u64_min, u64 u64_max);
+/* Turn wrange64 back into s64_min/s64_max/u64_min/u64_max */
+void wrange64_to_min_max(struct wrange64 w, s64 *s64_min, s64 *s64_max,
+			 u64 *u64_min, u64 *u64_max);
+
+/* Arithmetic operations */
+struct wrange64 wrange64_add(struct wrange64 a, struct wrange64 b);
+struct wrange64 wrange64_sub(struct wrange64 a, struct wrange64 b);
+struct wrange64 wrange64_mul(struct wrange64 a, struct wrange64 b);
+
+/* Set operations */
+struct wrange64 wrange64_intersect(struct wrange64 a, struct wrange64 b);
+struct wrange64 wrange64_union(struct wrange64 a, struct wrange64 b);
+
+/* Bitwise operations */
+struct wrange64 wrange64_and(struct wrange64 a, struct wrange64 b);
+struct wrange64 wrange64_or(struct wrange64 a, struct wrange64 b);
+struct wrange64 wrange64_xor(struct wrange64 a, struct wrange64 b);
+
+/* Shift operations */
+struct wrange64 wrange64_lshift(struct wrange64 a, u32 shift);
+struct wrange64 wrange64_rshift(struct wrange64 a, u32 shift);
+struct wrange64 wrange64_arshift(struct wrange64 a, u32 shift);
+
+/* Conversion between wrange32 and wrange64 */
+struct wrange64 wrange64_from_wrange32_zext(struct wrange32 w32);
+struct wrange64 wrange64_from_wrange32_sext(struct wrange32 w32);
+struct wrange32 wrange32_from_wrange64(struct wrange64 w64);
+
+static inline bool wrange64_is_empty(struct wrange64 w) {
+	/* Empty range is represented as start=1, end=0 (non-wrapping) */
+	return w.start == 1 && w.end == 0;
+}
+
+static inline bool wrange64_uwrapping(struct wrange64 w) {
+	/* Don't treat empty range as wrapping */
+	if (wrange64_is_empty(w))
+		return false;
+	return w.end < w.start;
+}
+
+static inline u64 wrange64_umin(struct wrange64 w) {
+	if (wrange64_uwrapping(w))
+		return U64_MIN;
+	else
+		return w.start;
+}
+
+static inline u64 wrange64_umax(struct wrange64 w) {
+	if (wrange64_uwrapping(w))
+		return U64_MAX;
+	else
+		return w.end;
+}
+
+static inline bool wrange64_swrapping(struct wrange64 w) {
+	return (s64)w.end < (s64)w.start;
+}
+
+static inline s64 wrange64_smin(struct wrange64 w) {
+	if (wrange64_swrapping(w))
+		return S64_MIN;
+	else
+		return w.start;
+}
+
+static inline s64 wrange64_smax(struct wrange64 w) {
+	if (wrange64_swrapping(w))
+		return S64_MAX;
+	else
+		return w.end;
+}
+
 #endif /* _LINUX_WRANGE_H */

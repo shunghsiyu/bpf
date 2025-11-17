@@ -441,3 +441,449 @@ struct wrange32 wrange32_xor(struct wrange32 a, struct wrange32 b)
 	 */
 	return WRANGE32_FULL;
 }
+
+/* ========== 64-bit Wrapped Range (wrange64) Implementation ========== */
+
+#define WRANGE64(_s, _e) ((struct wrange64) {.start = _s, .end = _e})
+
+struct wrange64 wrange64_from_min_max(s64 s64_min, s64 s64_max,
+				      u64 u64_min, u64 u64_max)
+{
+	struct wrange64 srange, urange;
+
+	/* Create wrange from signed bounds (cast to u64 for storage) */
+	srange = WRANGE64((u64)s64_min, (u64)s64_max);
+
+	/* Create wrange from unsigned bounds */
+	urange = WRANGE64(u64_min, u64_max);
+
+	/* Return intersection to get tightest possible range */
+	return wrange64_intersect(srange, urange);
+}
+
+void wrange64_to_min_max(struct wrange64 w, s64 *s64_min, s64 *s64_max,
+			 u64 *u64_min, u64 *u64_max)
+{
+	*s64_min = wrange64_smin(w);
+	*s64_max = wrange64_smax(w);
+	*u64_min = wrange64_umin(w);
+	*u64_max = wrange64_umax(w);
+}
+
+struct wrange64 wrange64_add(struct wrange64 a, struct wrange64 b)
+{
+	u64 a_len = a.end - a.start;
+	u64 b_len = b.end - b.start;
+	u64 new_len = a_len + b_len;
+
+	/* the new start/end pair goes full circle, so any value is possible */
+	if (new_len < a_len || new_len < b_len)
+		return WRANGE64(U64_MIN, U64_MAX);
+	else
+		return WRANGE64(a.start + b.start, a.end + b.end);
+}
+
+struct wrange64 wrange64_sub(struct wrange64 a, struct wrange64 b)
+{
+	u64 a_len = a.end - a.start;
+	u64 b_len = b.end - b.start;
+	u64 new_len = a_len + b_len;
+
+	/* the new start/end pair goes full circle, so any value is possible */
+	if (new_len < a_len || new_len < b_len)
+		return WRANGE64(U64_MIN, U64_MAX);
+	else
+		return WRANGE64(a.start - b.end, a.end - b.start);
+}
+
+struct wrange64 wrange64_mul(struct wrange64 a, struct wrange64 b)
+{
+	/* Be conservative for large values and negative numbers
+	 * Use U32_MAX as threshold since values beyond that are more
+	 * likely to overflow when multiplied
+	 */
+	if (a.end > U32_MAX || b.end > U32_MAX)
+		return WRANGE64(U64_MIN, U64_MAX);
+	else if (wrange64_smin(a) < 0 || wrange64_smin(b) < 0)
+		return WRANGE64(U64_MIN, U64_MAX);
+	else
+		return WRANGE64(a.start * b.start, a.end * b.end);
+}
+
+/* Set intersection: return range containing values in both a AND b */
+struct wrange64 wrange64_intersect(struct wrange64 a, struct wrange64 b)
+{
+	bool a_wrap, b_wrap;
+
+	/* Handle empty ranges */
+	if (wrange64_is_empty(a) || wrange64_is_empty(b))
+		return WRANGE64_EMPTY;
+
+	a_wrap = wrange64_uwrapping(a);
+	b_wrap = wrange64_uwrapping(b);
+
+	if (!a_wrap && !b_wrap) {
+		/* Both non-wrapping: [a.start, a.end] ∩ [b.start, b.end] */
+		u64 new_start, new_end;
+
+		/* Check if ranges overlap */
+		if (a.start > b.end || b.start > a.end)
+			return WRANGE64_EMPTY;
+
+		/* Return overlapping portion */
+		new_start = a.start > b.start ? a.start : b.start;
+		new_end = a.end < b.end ? a.end : b.end;
+		return WRANGE64(new_start, new_end);
+	}
+
+	if (a_wrap && b_wrap) {
+		/* Both wrapping: intersection is also wrapping */
+		u64 new_start, new_end;
+
+		new_start = a.start > b.start ? a.start : b.start;
+		new_end = a.end < b.end ? a.end : b.end;
+
+		/* Check if result is still wrapping */
+		if (new_end < new_start)
+			return WRANGE64(new_start, new_end);
+
+		return WRANGE64(new_start, new_end);
+	}
+
+	/* One wrapping, one not. WLOG assume 'a' is wrapping, 'b' is not */
+	if (!a_wrap) {
+		struct wrange64 tmp = a;
+		a = b;
+		b = tmp;
+	}
+
+	/* Check if b overlaps with upper part of a: [a.start, U64_MAX] */
+	if (b.start >= a.start) {
+		if (b.end >= a.start)
+			return WRANGE64(b.start, b.end);
+	}
+
+	/* Check if b overlaps with lower part of a: [0, a.end] */
+	if (b.end <= a.end) {
+		if (b.start <= a.end)
+			return WRANGE64(b.start, b.end);
+	}
+
+	/* Check if b spans both parts */
+	if (b.start <= a.end && b.end >= a.start) {
+		return a;
+	}
+
+	/* No overlap */
+	return WRANGE64_EMPTY;
+}
+
+/* Set union: return smallest range containing values in a OR b */
+struct wrange64 wrange64_union(struct wrange64 a, struct wrange64 b)
+{
+	bool a_wrap, b_wrap;
+
+	/* Handle empty ranges */
+	if (wrange64_is_empty(a))
+		return b;
+	if (wrange64_is_empty(b))
+		return a;
+
+	a_wrap = wrange64_uwrapping(a);
+	b_wrap = wrange64_uwrapping(b);
+
+	if (!a_wrap && !b_wrap) {
+		/* Both non-wrapping: simple case */
+		u64 new_start, new_end;
+
+		new_start = a.start < b.start ? a.start : b.start;
+		new_end = a.end > b.end ? a.end : b.end;
+		return WRANGE64(new_start, new_end);
+	}
+
+	if (a_wrap && b_wrap) {
+		/* Both wrapping: union uses smaller start and larger end */
+		u64 new_start, new_end;
+
+		new_start = a.start < b.start ? a.start : b.start;
+		new_end = a.end > b.end ? a.end : b.end;
+
+		/* If new_end >= new_start, we've wrapped around completely */
+		if (new_end >= new_start)
+			return WRANGE64_FULL;
+
+		return WRANGE64(new_start, new_end);
+	}
+
+	/* One wrapping, one not */
+	if (!a_wrap) {
+		struct wrange64 tmp = a;
+		a = b;
+		b = tmp;
+	}
+
+	/* Check if b is contained in a's upper part [a.start, U64_MAX] */
+	if (b.start >= a.start && b.end >= a.start)
+		return a;
+
+	/* Check if b is contained in a's lower part [0, a.end] */
+	if (b.start <= a.end && b.end <= a.end)
+		return a;
+
+	/* Check if we can extend a to include b without going full range */
+	if (b.start <= a.end + 1 && b.end >= a.start - 1)
+		return WRANGE64_FULL;
+
+	/* Try to extend a to include b */
+	if (b.end < a.start) {
+		return WRANGE64(a.start, b.end);
+	}
+
+	if (b.start > a.end) {
+		return WRANGE64(b.start, a.end);
+	}
+
+	/* Conservative fallback: return full range */
+	return WRANGE64_FULL;
+}
+
+/* Logical right shift: divide by power of 2 (unsigned) */
+struct wrange64 wrange64_rshift(struct wrange64 a, u32 shift)
+{
+	/* Shift must be < 64 */
+	if (shift >= 64)
+		return WRANGE64(0, 0);
+
+	/* Right shift narrows the range (divides values) */
+	if (!wrange64_uwrapping(a)) {
+		/* Non-wrapping: simple case */
+		return WRANGE64(a.start >> shift, a.end >> shift);
+	}
+
+	/* Wrapping case: range spans wrap point */
+	return WRANGE64(0, U64_MAX >> shift);
+}
+
+/* Left shift: multiply by power of 2 */
+struct wrange64 wrange64_lshift(struct wrange64 a, u32 shift)
+{
+	u64 max_safe;
+
+	/* Shift must be < 64 */
+	if (shift >= 64)
+		return WRANGE64(0, 0);
+
+	/* Check for overflow */
+	max_safe = U64_MAX >> shift;
+
+	if (wrange64_umax(a) > max_safe) {
+		/* Would overflow - return full range */
+		return WRANGE64_FULL;
+	}
+
+	/* No overflow possible */
+	if (!wrange64_uwrapping(a)) {
+		/* Non-wrapping: simple shift */
+		return WRANGE64(a.start << shift, a.end << shift);
+	}
+
+	/* Wrapping: conservative */
+	if (((a.end - a.start) >> shift) != (a.end >> shift) - (a.start >> shift))
+		return WRANGE64_FULL;
+
+	return WRANGE64(a.start << shift, a.end << shift);
+}
+
+/* Arithmetic right shift: preserves sign bit */
+struct wrange64 wrange64_arshift(struct wrange64 a, u32 shift)
+{
+	s64 smin, smax;
+
+	/* Shift must be < 64 */
+	if (shift >= 64) {
+		/* All bits become sign bit */
+		if (wrange64_smin(a) < 0)
+			return WRANGE64(U64_MAX, U64_MAX);  /* -1 */
+		else
+			return WRANGE64(0, 0);  /* 0 */
+	}
+
+	/* If not wrapping in signed domain, can compute precisely */
+	if (!wrange64_swrapping(a)) {
+		smin = wrange64_smin(a);
+		smax = wrange64_smax(a);
+		return WRANGE64((u64)(smin >> shift), (u64)(smax >> shift));
+	}
+
+	/* Wrapping in signed domain: conservative */
+	return WRANGE64_FULL;
+}
+
+/* Bitwise AND: can only clear bits */
+struct wrange64 wrange64_and(struct wrange64 a, struct wrange64 b)
+{
+	u64 umax_a, umax_b, upper;
+
+	/* Handle empty ranges */
+	if (wrange64_is_empty(a) || wrange64_is_empty(b))
+		return WRANGE64_EMPTY;
+
+	/* AND can only clear bits, never set them */
+	umax_a = wrange64_umax(a);
+	umax_b = wrange64_umax(b);
+	upper = umax_a < umax_b ? umax_a : umax_b;
+
+	/* Special case: AND with constant (single-value range) */
+	if (a.start == a.end) {
+		u64 k = a.start;
+		if (!wrange64_uwrapping(b) && b.end - b.start < 256) {
+			u64 min_result = k & b.start;
+			u64 max_result = k & b.end;
+			if (min_result <= max_result)
+				return WRANGE64(min_result, max_result);
+		}
+		return WRANGE64(0, k);
+	}
+
+	if (b.start == b.end) {
+		u64 k = b.start;
+		if (!wrange64_uwrapping(a) && a.end - a.start < 256) {
+			u64 min_result = a.start & k;
+			u64 max_result = a.end & k;
+			if (min_result <= max_result)
+				return WRANGE64(min_result, max_result);
+		}
+		return WRANGE64(0, k);
+	}
+
+	/* General case: very conservative */
+	return WRANGE64(0, upper);
+}
+
+/* Bitwise OR: can only set bits */
+struct wrange64 wrange64_or(struct wrange64 a, struct wrange64 b)
+{
+	u64 umin_a, umin_b, lower;
+	u64 umax_a, umax_b;
+
+	/* Handle empty ranges */
+	if (wrange64_is_empty(a))
+		return b;
+	if (wrange64_is_empty(b))
+		return a;
+
+	/* Special cases */
+	if (a.start == 0 && a.end == 0)
+		return b;  /* 0 | x = x */
+	if (b.start == 0 && b.end == 0)
+		return a;  /* x | 0 = x */
+
+	/* OR can only set bits, never clear them */
+	umin_a = wrange64_umin(a);
+	umin_b = wrange64_umin(b);
+	lower = umin_a > umin_b ? umin_a : umin_b;
+
+	/* Upper bound */
+	umax_a = wrange64_umax(a);
+	umax_b = wrange64_umax(b);
+
+	/* Both constants: exact result */
+	if (a.start == a.end && b.start == b.end) {
+		return WRANGE64(a.start | b.start, a.start | b.start);
+	}
+
+	/* Conservative upper bound */
+	return WRANGE64(lower, umax_a | umax_b);
+}
+
+/* Bitwise XOR: flips bits */
+struct wrange64 wrange64_xor(struct wrange64 a, struct wrange64 b)
+{
+	/* Handle empty ranges */
+	if (wrange64_is_empty(a) || wrange64_is_empty(b))
+		return WRANGE64_EMPTY;
+
+	/* Special cases */
+	if (b.start == 0 && b.end == 0)
+		return a;  /* x ^ 0 = x */
+	if (a.start == 0 && a.end == 0)
+		return b;  /* 0 ^ x = x */
+
+	/* Same value: x ^ x = 0 */
+	if (a.start == a.end && b.start == b.end && a.start == b.start)
+		return WRANGE64(0, 0);
+
+	/* XOR with all 1s is bitwise NOT */
+	if (b.start == U64_MAX && b.end == U64_MAX) {
+		if (!wrange64_uwrapping(a))
+			return WRANGE64(~a.end, ~a.start);
+	}
+	if (a.start == U64_MAX && a.end == U64_MAX) {
+		if (!wrange64_uwrapping(b))
+			return WRANGE64(~b.end, ~b.start);
+	}
+
+	/* Both constants: exact result */
+	if (a.start == a.end && b.start == b.end)
+		return WRANGE64(a.start ^ b.start, a.start ^ b.start);
+
+	/* General case: conservative */
+	return WRANGE64_FULL;
+}
+
+/* Conversion: wrange32 to wrange64 with zero extension */
+struct wrange64 wrange64_from_wrange32_zext(struct wrange32 w32)
+{
+	/* Handle empty range */
+	if (wrange32_is_empty(w32))
+		return WRANGE64_EMPTY;
+
+	/* Zero extension: upper 32 bits are all 0
+	 * If wrapping in 32-bit domain, becomes [0, U32_MAX] in 64-bit
+	 */
+	if (wrange32_uwrapping(w32))
+		return WRANGE64(0, U32_MAX);
+
+	/* Non-wrapping: simple extension */
+	return WRANGE64((u64)w32.start, (u64)w32.end);
+}
+
+/* Conversion: wrange32 to wrange64 with sign extension */
+struct wrange64 wrange64_from_wrange32_sext(struct wrange32 w32)
+{
+	s64 start, end;
+
+	/* Handle empty range */
+	if (wrange32_is_empty(w32))
+		return WRANGE64_EMPTY;
+
+	/* Sign extension: if wrapping in signed 32-bit domain,
+	 * becomes full s32 range in 64-bit
+	 */
+	if (wrange32_swrapping(w32))
+		return WRANGE64((u64)S32_MIN, (u64)S32_MAX);
+
+	/* Non-wrapping in signed domain: sign-extend start and end */
+	start = (s64)(s32)w32.start;
+	end = (s64)(s32)w32.end;
+	return WRANGE64((u64)start, (u64)end);
+}
+
+/* Conversion: wrange64 to wrange32 (truncation) */
+struct wrange32 wrange32_from_wrange64(struct wrange64 w64)
+{
+	/* Handle empty range */
+	if (wrange64_is_empty(w64))
+		return WRANGE32_EMPTY;
+
+	/* If the 64-bit range fits entirely in 32 bits, preserve precision */
+	if (w64.start <= U32_MAX && w64.end <= U32_MAX) {
+		if (!wrange64_uwrapping(w64))
+			return WRANGE32((u32)w64.start, (u32)w64.end);
+	}
+
+	/* Truncation: keep only lower 32 bits
+	 * This may create or change wrapping behavior
+	 */
+	return WRANGE32((u32)w64.start, (u32)w64.end);
+}
