@@ -1,0 +1,81 @@
+From c0def4aa397fe1f78de86aba917e35c77ab47e8d Mon Sep 17 00:00:00 2001
+From: Shung-Hsi Yu <shung-hsi.yu@suse.com>
+Date: Tue, 19 Nov 2024 15:45:44 +0800
+Subject: [PATCH 3/3] selftests/bpf: add more verifier tests for signed range
+ deduction of BPF_AND
+
+WIP
+
+Signed-off-by: Shung-Hsi Yu <shung-hsi.yu@suse.com>
+---
+ .../selftests/bpf/progs/verifier_and.c        | 56 +++++++++++++++++++
+ 1 file changed, 56 insertions(+)
+
+diff --git a/tools/testing/selftests/bpf/progs/verifier_and.c b/tools/testing/selftests/bpf/progs/verifier_and.c
+index e97e518516b6..56c362f99a21 100644
+--- a/tools/testing/selftests/bpf/progs/verifier_and.c
++++ b/tools/testing/selftests/bpf/progs/verifier_and.c
+@@ -104,4 +104,60 @@ l0_%=:	r0 = 0;						\
+ 	: __clobber_all);
+ }
+ 
++SEC("socket")
++__description("[-1,0] range vs negative constant")
++__success __success_unpriv __retval(0)
++__naked void and_mixed_range_vs_neg_const(void)
++{
++	/* Use ARSH with AND like compiler would */
++	asm volatile ("					\
++	call %[bpf_get_prandom_u32];			\
++	r0 <<= 63;					\
++	r0 s>>= 63; /* r0 = [-1, 0] */			\
++	r1 = -13;					\
++	r0 &= r1;					\
++	/* [-1, 0] & -13 give either -13 or 0. So	\
++	 * ideally this should be a tight range of	\
++	 * [-13, 0], but verifier is not advanced enough\
++	 * to deduce that. just knowing result is in	\
++	 * [-16, 0] is good enough.			\
++	 */                                             \
++	r2 = 0;						\
++	if r0 s> r2 goto l0_%=;				\
++	r2 = -16;					\
++	if r0 s< r2 goto l0_%=;				\
++	r0 = 0;						\
++	exit;						\
++l0_%=:  r1 = *(u32*)(r1 + 0);				\
++	exit;						\
++"	:
++	: __imm(bpf_get_prandom_u32)
++	: __clobber_all);
++}
++
++SEC("socket")
++__description("32-bit [-1,0] range vs negative constant")
++__success __success_unpriv __retval(0)
++__naked void and32_mixed_range_vs_neg_const(void)
++{
++	/* See signed_and_mixed_range_vs_neg_const() */
++	asm volatile ("					\
++	call %[bpf_get_prandom_u32];			\
++	w0 <<= 31;					\
++	w0 s>>= 31;					\
++	w1 = -13;					\
++	w0 &= w1;					\
++	w2 = 0;						\
++	if w0 s> w2 goto l0_%=;				\
++	w2 = -16;					\
++	if w0 s< w2 goto l0_%=;				\
++	r0 = 0;						\
++	exit;						\
++l0_%=:  r1 = *(u32*)(r1 + 0);				\
++	exit;						\
++"	:
++	: __imm(bpf_get_prandom_u32)
++	: __clobber_all);
++}
++
+ char _license[] SEC("license") = "GPL";
+-- 
+2.51.1
+

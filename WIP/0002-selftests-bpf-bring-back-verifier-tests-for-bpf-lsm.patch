@@ -1,0 +1,46 @@
+From 5cd7616c32beb5f0a46f5e7ab7ded03edf526b7a Mon Sep 17 00:00:00 2001
+From: Shung-Hsi Yu <shung-hsi.yu@suse.com>
+Date: Mon, 18 Nov 2024 16:59:09 +0800
+Subject: [PATCH 2/3] selftests/bpf: bring back verifier tests for bpf lsm
+
+Add back 'test 3' from Xu Kuohai, which was previously removed because BPF
+verifier signed range deduction was not precise enough. With last patch in this
+series applied this test no longer fails.
+
+Link: https://lore.kernel.org/bpf/CAADnVQJ2bE0cAp8DNh1m6VqphNvWLkq8p=gwyPbbcdopaKcCCA@mail.gmail.com/
+Signed-off-by: Xu Kuohai <xukuohai@huawei.com>
+Signed-off-by: Shung-Hsi Yu <shung-hsi.yu@suse.com>
+---
+ tools/testing/selftests/bpf/progs/verifier_lsm.c | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/tools/testing/selftests/bpf/progs/verifier_lsm.c b/tools/testing/selftests/bpf/progs/verifier_lsm.c
+index 32e5e779cb96..08251c517154 100644
+--- a/tools/testing/selftests/bpf/progs/verifier_lsm.c
++++ b/tools/testing/selftests/bpf/progs/verifier_lsm.c
+@@ -26,6 +26,22 @@ __naked int errno_zero_retval_test2(void *ctx)
+ 	::: __clobber_all);
+ }
+ 
++SEC("lsm/file_alloc_security")
++__description("lsm bpf prog with -4095~0 retval. test 3")
++__success
++__naked int errno_zero_retval_test3(void *ctx)
++{
++	asm volatile (
++	"call %[bpf_get_prandom_u32];"
++	"r0 <<= 63;"
++	"r0 s>>= 63;"
++	"r0 &= -13;"
++	"exit;"
++	:
++	: __imm(bpf_get_prandom_u32)
++	: __clobber_all);
++}
++
+ SEC("lsm/file_mprotect")
+ __description("lsm bpf prog with -4095~0 retval. test 4")
+ __failure __msg("R0 has smin=-4096 smax=-4096 should have been in [-4095, 0]")
+-- 
+2.51.1
+
