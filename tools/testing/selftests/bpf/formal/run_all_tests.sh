@@ -8,6 +8,12 @@ tests=(
     "wrange_mul.py:Multiplication"
     "wrange_intersect.py:Intersection"
     "wrange_union.py:Union"
+    "wrange_rshift.py:Right Shift (logical)"
+    "wrange_lshift.py:Left Shift"
+    "wrange_arshift.py:Arithmetic Right Shift"
+    "wrange_and.py:Bitwise AND"
+    "wrange_or.py:Bitwise OR"
+    "wrange_xor.py:Bitwise XOR"
 )
 
 passed=0
@@ -37,7 +43,7 @@ echo "Failed: $failed/${#tests[@]}"
 
 if [ $failed -eq 0 ]; then
     echo ""
-    echo "✓ ALL TESTS PASSED - Phase 1 validation complete!"
+    echo "✓ ALL TESTS PASSED - wrange32 validation complete!"
     exit 0
 else
     echo ""

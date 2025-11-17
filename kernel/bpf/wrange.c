@@ -235,3 +235,209 @@ struct wrange32 wrange32_union(struct wrange32 a, struct wrange32 b)
 	/* Conservative fallback: return full range */
 	return WRANGE32_FULL;
 }
+
+/* Logical right shift: divide by power of 2 (unsigned) */
+struct wrange32 wrange32_rshift(struct wrange32 a, u32 shift)
+{
+	/* Shift must be < 32 */
+	if (shift >= 32)
+		return WRANGE32(0, 0);
+
+	/* Right shift narrows the range (divides values) */
+	if (!wrange32_uwrapping(a)) {
+		/* Non-wrapping: simple case */
+		return WRANGE32(a.start >> shift, a.end >> shift);
+	}
+
+	/* Wrapping case: range spans wrap point
+	 * Wrapping means range includes both large values (near U32_MAX)
+	 * and small values (near 0). After right shift, this becomes [0, max]
+	 */
+	return WRANGE32(0, U32_MAX >> shift);
+}
+
+/* Left shift: multiply by power of 2 */
+struct wrange32 wrange32_lshift(struct wrange32 a, u32 shift)
+{
+	u32 max_safe;
+
+	/* Shift must be < 32 */
+	if (shift >= 32)
+		return WRANGE32(0, 0);
+
+	/* Check for overflow: if any value would overflow, be conservative */
+	max_safe = U32_MAX >> shift;  /* Maximum value that won't overflow */
+
+	if (wrange32_umax(a) > max_safe) {
+		/* Would overflow - return full range */
+		return WRANGE32_FULL;
+	}
+
+	/* No overflow possible */
+	if (!wrange32_uwrapping(a)) {
+		/* Non-wrapping: simple shift */
+		return WRANGE32(a.start << shift, a.end << shift);
+	}
+
+	/* Wrapping: after shift, might not wrap anymore or might overflow */
+	/* Conservative approach: check if shift creates full range */
+	if (((a.end - a.start) >> shift) != (a.end >> shift) - (a.start >> shift))
+		return WRANGE32_FULL;
+
+	return WRANGE32(a.start << shift, a.end << shift);
+}
+
+/* Arithmetic right shift: preserves sign bit */
+struct wrange32 wrange32_arshift(struct wrange32 a, u32 shift)
+{
+	s32 smin, smax;
+
+	/* Shift must be < 32 */
+	if (shift >= 32) {
+		/* All bits become sign bit */
+		if (wrange32_smin(a) < 0)
+			return WRANGE32(U32_MAX, U32_MAX);  /* -1 */
+		else
+			return WRANGE32(0, 0);  /* 0 */
+	}
+
+	/* If not wrapping in signed domain, can compute precisely */
+	if (!wrange32_swrapping(a)) {
+		smin = wrange32_smin(a);
+		smax = wrange32_smax(a);
+		return WRANGE32((u32)(smin >> shift), (u32)(smax >> shift));
+	}
+
+	/* Wrapping in signed domain means range crosses S32_MIN/S32_MAX boundary
+	 * After arithmetic shift, this becomes full range
+	 */
+	return WRANGE32_FULL;
+}
+
+/* Bitwise AND: can only clear bits */
+struct wrange32 wrange32_and(struct wrange32 a, struct wrange32 b)
+{
+	u32 umax_a, umax_b, upper;
+
+	/* Handle empty ranges */
+	if (wrange32_is_empty(a) || wrange32_is_empty(b))
+		return WRANGE32_EMPTY;
+
+	/* AND can only clear bits, never set them
+	 * Result is always <= min(umax(a), umax(b))
+	 */
+	umax_a = wrange32_umax(a);
+	umax_b = wrange32_umax(b);
+	upper = umax_a < umax_b ? umax_a : umax_b;
+
+	/* Special case: AND with constant (single-value range) */
+	if (a.start == a.end) {
+		/* [k, k] & b → compute precisely if possible */
+		u32 k = a.start;
+		if (!wrange32_uwrapping(b) && b.end - b.start < 256) {
+			/* Small range: compute min/max by checking endpoints */
+			u32 min_result = k & b.start;
+			u32 max_result = k & b.end;
+			if (min_result <= max_result)
+				return WRANGE32(min_result, max_result);
+		}
+		/* AND with constant: result in [0, k] */
+		return WRANGE32(0, k);
+	}
+
+	if (b.start == b.end) {
+		/* a & [k, k] → symmetric case */
+		u32 k = b.start;
+		if (!wrange32_uwrapping(a) && a.end - a.start < 256) {
+			u32 min_result = a.start & k;
+			u32 max_result = a.end & k;
+			if (min_result <= max_result)
+				return WRANGE32(min_result, max_result);
+		}
+		return WRANGE32(0, k);
+	}
+
+	/* General case: very conservative
+	 * AND result is in [0, min(umax(a), umax(b))]
+	 */
+	return WRANGE32(0, upper);
+}
+
+/* Bitwise OR: can only set bits */
+struct wrange32 wrange32_or(struct wrange32 a, struct wrange32 b)
+{
+	u32 umin_a, umin_b, lower;
+	u32 umax_a, umax_b;
+
+	/* Handle empty ranges */
+	if (wrange32_is_empty(a))
+		return b;
+	if (wrange32_is_empty(b))
+		return a;
+
+	/* Special cases */
+	if (a.start == 0 && a.end == 0)
+		return b;  /* 0 | x = x */
+	if (b.start == 0 && b.end == 0)
+		return a;  /* x | 0 = x */
+
+	/* OR can only set bits, never clear them
+	 * Result is >= max(umin(a), umin(b))
+	 */
+	umin_a = wrange32_umin(a);
+	umin_b = wrange32_umin(b);
+	lower = umin_a > umin_b ? umin_a : umin_b;
+
+	/* Upper bound: OR can set any bit from either operand
+	 * Conservative: use bitwise OR of upper bounds
+	 */
+	umax_a = wrange32_umax(a);
+	umax_b = wrange32_umax(b);
+
+	/* For conservative upper bound, check if OR would create larger value */
+	if (a.start == a.end && b.start == b.end) {
+		/* Both constants: exact result */
+		return WRANGE32(a.start | b.start, a.start | b.start);
+	}
+
+	/* Conservative upper bound: worst case where all bits are set */
+	return WRANGE32(lower, umax_a | umax_b);
+}
+
+/* Bitwise XOR: flips bits */
+struct wrange32 wrange32_xor(struct wrange32 a, struct wrange32 b)
+{
+	/* Handle empty ranges */
+	if (wrange32_is_empty(a) || wrange32_is_empty(b))
+		return WRANGE32_EMPTY;
+
+	/* Special cases */
+	if (b.start == 0 && b.end == 0)
+		return a;  /* x ^ 0 = x */
+	if (a.start == 0 && a.end == 0)
+		return b;  /* 0 ^ x = x */
+
+	/* Same value: x ^ x = 0 */
+	if (a.start == a.end && b.start == b.end && a.start == b.start)
+		return WRANGE32(0, 0);
+
+	/* XOR with all 1s is bitwise NOT */
+	if (b.start == U32_MAX && b.end == U32_MAX) {
+		if (!wrange32_uwrapping(a))
+			return WRANGE32(~a.end, ~a.start);  /* Inverts and reverses */
+	}
+	if (a.start == U32_MAX && a.end == U32_MAX) {
+		if (!wrange32_uwrapping(b))
+			return WRANGE32(~b.end, ~b.start);
+	}
+
+	/* Both constants: exact result */
+	if (a.start == a.end && b.start == b.end)
+		return WRANGE32(a.start ^ b.start, a.start ^ b.start);
+
+	/* General case: XOR is very hard to analyze
+	 * Can flip any bits, making precise analysis difficult
+	 * Conservative: full range
+	 */
+	return WRANGE32_FULL;
+}

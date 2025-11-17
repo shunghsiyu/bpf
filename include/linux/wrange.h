@@ -55,6 +55,16 @@ struct wrange32 wrange32_mul(struct wrange32 a, struct wrange32 b);
 struct wrange32 wrange32_intersect(struct wrange32 a, struct wrange32 b);
 struct wrange32 wrange32_union(struct wrange32 a, struct wrange32 b);
 
+/* Bitwise operations */
+struct wrange32 wrange32_and(struct wrange32 a, struct wrange32 b);
+struct wrange32 wrange32_or(struct wrange32 a, struct wrange32 b);
+struct wrange32 wrange32_xor(struct wrange32 a, struct wrange32 b);
+
+/* Shift operations */
+struct wrange32 wrange32_lshift(struct wrange32 a, u32 shift);
+struct wrange32 wrange32_rshift(struct wrange32 a, u32 shift);
+struct wrange32 wrange32_arshift(struct wrange32 a, u32 shift);
+
 static inline bool wrange32_is_empty(struct wrange32 w) {
 	/* Empty range is represented as start=1, end=0 (non-wrapping) */
 	return w.start == 1 && w.end == 0;
