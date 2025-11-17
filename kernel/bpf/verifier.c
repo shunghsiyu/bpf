@@ -15048,6 +15048,65 @@ static void scalar_min_max_mul(struct bpf_reg_state *dst_reg,
 	}
 }
 
+/*
+ * Helper for computing a conservative lower bound for signed AND operations.
+ *
+ * For negative values: extracts the common most-significant '1' bits prefix
+ * by finding the first unset bit and clearing all bits after it.
+ * For non-negative values: returns 0.
+ *
+ * This provides a safe lower bound for "negative & negative" cases in BPF_AND,
+ * where the result preserves the common MSB '1' bits prefix of both operands.
+ *
+ * Examples (showing values as hex for clarity):
+ *   s32_and_min_bound(0xfffffff3) == 0xfffffff0  /* -13 -> -16 */
+ *   s32_and_min_bound(0xffffff00) == 0xffffff00  /* -256 -> -256  */
+ *   s32_and_min_bound(0xffffffff) == 0xffffffff  /* -1 -> -1 */
+ *   s32_and_min_bound(0x0000007f) == 0x00000000  /* 127 -> 0 */
+ */
+static inline s32 s32_and_min_bound(s32 v)
+{
+	u8 first_zero_bit;
+	u32 clear_mask;
+
+	/*
+	 * fls(~v) finds the position of the most-significant unset bit.
+	 * We use ~v because fls() finds set bits, and we need unset bits.
+	 *
+	 * For non-negative v: MSB is 0, so ~v has MSB=1, giving fls(~v)=32.
+	 * We handle this specially to avoid undefined behavior from (1UL<<32).
+	 */
+	first_zero_bit = fls(~v);
+	if (first_zero_bit > 31)
+		return 0;  /* v is non-negative */
+
+	/* Create mask to clear all bits at and after the first zero bit */
+	clear_mask = (1UL << first_zero_bit) - 1;
+	return ~clear_mask;
+}
+
+/*
+ * 64-bit version of s32_and_min_bound(). See above for detailed explanation.
+ *
+ * Examples:
+ *   s64_and_min_bound(0xffff000000000003) == 0xffff000000000000
+ *   s64_and_min_bound(0xfffffb0000000000) == 0xfffff80000000000
+ *   s64_and_min_bound(0xffffffffffffffff) == 0xffffffffffffffff  /* -1 -> -1 */
+ *   s64_and_min_bound(0x0000fb0000000000) == 0x0000000000000000  /* positive -> 0 */
+ */
+static inline s64 s64_and_min_bound(s64 v)
+{
+	u8 first_zero_bit;
+	u64 clear_mask;
+
+	first_zero_bit = fls64(~v);
+	if (first_zero_bit > 63)
+		return 0;  /* v is non-negative */
+
+	clear_mask = (1ULL << first_zero_bit) - 1;
+	return ~clear_mask;
+}
+
 static void scalar32_min_max_and(struct bpf_reg_state *dst_reg,
 				 struct bpf_reg_state *src_reg)
 {
@@ -15067,16 +15126,24 @@ static void scalar32_min_max_and(struct bpf_reg_state *dst_reg,
 	dst_reg->u32_min_value = var32_off.value;
 	dst_reg->u32_max_value = min(dst_reg->u32_max_value, umax_val);
 
-	/* Safe to set s32 bounds by casting u32 result into s32 when u32
-	 * doesn't cross sign boundary. Otherwise set s32 bounds to unbounded.
+	/* Unsigned bounds propagate to signed via __reg_deduce_bounds() */
+
+	/*
+	 * Compute signed bounds directly from signed operand ranges.
+	 * This handles the tricky "[-1, 0] & -CONST" pattern that tnum
+	 * cannot track precisely (since [-1,0] becomes tnum_unknown).
+	 *
+	 * For smin: use s32_and_min_bound(min(smin, smin)) which extracts
+	 * the common MSB '1' bits prefix for negative & negative, and
+	 * returns 0 for other sign combinations.
+	 *
+	 * For smax: use max(smax, smax) which safely over-approximates
+	 * across all sign combinations.
 	 */
-	if ((s32)dst_reg->u32_min_value <= (s32)dst_reg->u32_max_value) {
-		dst_reg->s32_min_value = dst_reg->u32_min_value;
-		dst_reg->s32_max_value = dst_reg->u32_max_value;
-	} else {
-		dst_reg->s32_min_value = S32_MIN;
-		dst_reg->s32_max_value = S32_MAX;
-	}
+	dst_reg->s32_min_value = s32_and_min_bound(min(dst_reg->s32_min_value,
+							src_reg->s32_min_value));
+	dst_reg->s32_max_value = max(dst_reg->s32_max_value,
+				     src_reg->s32_max_value);
 }
 
 static void scalar_min_max_and(struct bpf_reg_state *dst_reg,
@@ -15097,17 +15164,35 @@ static void scalar_min_max_and(struct bpf_reg_state *dst_reg,
 	dst_reg->umin_value = dst_reg->var_off.value;
 	dst_reg->umax_value = min(dst_reg->umax_value, umax_val);
 
-	/* Safe to set s64 bounds by casting u64 result into s64 when u64
-	 * doesn't cross sign boundary. Otherwise set s64 bounds to unbounded.
+	/* Unsigned bounds propagate to signed via __reg_deduce_bounds() */
+
+	/*
+	 * Compute signed bounds directly from signed operand ranges.
+	 *
+	 * BPF_AND is challenging for signed range tracking because:
+	 * - The result can only clear bits, never set them
+	 * - Negative values can "overflow" into positive (e.g., -1 & 0x7f = 0x7f)
+	 * - The [-1, 0] range (common from sign-extension) cannot be tracked by
+	 *   tnum, which represents it as tnum_unknown
+	 *
+	 * Our approach:
+	 * - smin: For "negative & negative", the result preserves their common
+	 *   MSB '1' bits prefix. s64_and_min_bound() extracts this prefix.
+	 *   For other sign combinations, it returns 0 (always safe).
+	 *
+	 * - smax: max(smax, smax) safely over-approximates all cases:
+	 *   * negative & negative: result is less negative than the larger input
+	 *   * negative & non-negative: result is non-negative (bounded by non-neg input)
+	 *   * non-negative & non-negative: result is smaller (but max() is still safe)
 	 */
-	if ((s64)dst_reg->umin_value <= (s64)dst_reg->umax_value) {
-		dst_reg->smin_value = dst_reg->umin_value;
-		dst_reg->smax_value = dst_reg->umax_value;
-	} else {
-		dst_reg->smin_value = S64_MIN;
-		dst_reg->smax_value = S64_MAX;
-	}
-	/* We may learn something more from the var_off */
+	dst_reg->smin_value = s64_and_min_bound(min(dst_reg->smin_value,
+						     src_reg->smin_value));
+	dst_reg->smax_value = max(dst_reg->smax_value, src_reg->smax_value);
+
+	/*
+	 * var_off may provide tighter bounds when at least one operand is
+	 * non-negative (since tnum can track those cases precisely).
+	 */
 	__update_reg_bounds(dst_reg);
 }
 
