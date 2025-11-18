@@ -2170,6 +2170,9 @@ static void ___mark_reg_known(struct bpf_reg_state *reg, u64 imm)
 	reg->s32_max_value = (s32)imm;
 	reg->u32_min_value = (u32)imm;
 	reg->u32_max_value = (u32)imm;
+
+	/* Phase 4: Also populate wrange fields (parallel tracking) */
+	wrange_from_reg(reg);
 }
 
 /* Mark the unknown part of a register (variable offset or scalar value) as
@@ -2192,6 +2195,10 @@ static void __mark_reg32_known(struct bpf_reg_state *reg, u64 imm)
 	reg->s32_max_value = (s32)imm;
 	reg->u32_min_value = (u32)imm;
 	reg->u32_max_value = (u32)imm;
+
+	/* Phase 4: Also populate wrange32 field (parallel tracking) */
+	reg->var32_range = wrange32_from_min_max(
+		(s32)imm, (s32)imm, (u32)imm, (u32)imm);
 }
 
 /* Mark the 'variable offset' part of a register as zero.  This should be
@@ -2210,6 +2217,32 @@ static void __mark_reg_const_zero(const struct bpf_verifier_env *env, struct bpf
 	 * in which case everything is forced to be precise)
 	 */
 	reg->precise = !env->bpf_capable;
+}
+
+/* ========== wrange helper functions (Phase 4: parallel tracking) ========== */
+
+/* Sync wrange fields from old min/max values */
+static void wrange_from_reg(struct bpf_reg_state *reg)
+{
+	reg->var_range = wrange64_from_min_max(
+		reg->smin_value, reg->smax_value,
+		reg->umin_value, reg->umax_value);
+
+	reg->var32_range = wrange32_from_min_max(
+		reg->s32_min_value, reg->s32_max_value,
+		reg->u32_min_value, reg->u32_max_value);
+}
+
+/* Sync old min/max values from wrange fields */
+static void wrange_to_reg(struct bpf_reg_state *reg)
+{
+	wrange64_to_min_max(reg->var_range,
+		&reg->smin_value, &reg->smax_value,
+		&reg->umin_value, &reg->umax_value);
+
+	wrange32_to_min_max(reg->var32_range,
+		&reg->s32_min_value, &reg->s32_max_value,
+		&reg->u32_min_value, &reg->u32_max_value);
 }
 
 static void mark_reg_known_zero(struct bpf_verifier_env *env,
@@ -14895,6 +14928,9 @@ static void scalar32_min_max_add(struct bpf_reg_state *dst_reg,
 		*dst_umin = 0;
 		*dst_umax = U32_MAX;
 	}
+
+	/* Phase 4: Also update wrange32 field (parallel tracking) */
+	dst_reg->var32_range = wrange32_add(dst_reg->var32_range, src_reg->var32_range);
 }
 
 static void scalar_min_max_add(struct bpf_reg_state *dst_reg,
@@ -14926,6 +14962,9 @@ static void scalar_min_max_add(struct bpf_reg_state *dst_reg,
 		*dst_umin = 0;
 		*dst_umax = U64_MAX;
 	}
+
+	/* Phase 4: Also update wrange fields (parallel tracking) */
+	dst_reg->var_range = wrange64_add(dst_reg->var_range, src_reg->var_range);
 }
 
 static void scalar32_min_max_sub(struct bpf_reg_state *dst_reg,

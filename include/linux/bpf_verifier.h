@@ -8,6 +8,7 @@
 #include <linux/btf.h> /* for struct btf and btf_id() */
 #include <linux/filter.h> /* for MAX_BPF_STACK */
 #include <linux/tnum.h>
+#include <linux/wrange.h>
 
 /* Maximum variable offset umax_value permitted when resolving memory accesses.
  * In practice this is far bigger than any realistic pointer offset; this limit
@@ -129,6 +130,11 @@ struct bpf_reg_state {
 	s32 s32_max_value; /* maximum possible (s32)value */
 	u32 u32_min_value; /* minimum possible (u32)value */
 	u32 u32_max_value; /* maximum possible (u32)value */
+	/* NEW: Unified wrapped range tracking (Phase 4: parallel tracking)
+	 * These will eventually replace the 8 min/max fields above.
+	 */
+	struct wrange64 var_range;    /* 64-bit unified tracking */
+	struct wrange32 var32_range;  /* 32-bit subregister tracking */
 	/* For PTR_TO_PACKET, used to find other pointers with the same variable
 	 * offset, so they can share range knowledge.
 	 * For PTR_TO_MAP_VALUE_OR_NULL this is used to share which map value we
