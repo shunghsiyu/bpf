@@ -15097,6 +15097,12 @@ static void scalar32_min_max_mul(struct bpf_reg_state *dst_reg,
 		*dst_smin = min_array(tmp_prod, 4);
 		*dst_smax = max_array(tmp_prod, 4);
 	}
+
+	/* Phase 4: Also update wrange32 field (parallel tracking) */
+	dst_reg->var32_range = wrange32_mul(dst_reg->var32_range, src_reg->var32_range);
+
+	/* Phase 4: Verify old and new tracking match */
+	wrange_verify_sync(dst_reg);
 }
 
 static void scalar_min_max_mul(struct bpf_reg_state *dst_reg,
@@ -15125,6 +15131,12 @@ static void scalar_min_max_mul(struct bpf_reg_state *dst_reg,
 		*dst_smin = min_array(tmp_prod, 4);
 		*dst_smax = max_array(tmp_prod, 4);
 	}
+
+	/* Phase 4: Also update wrange fields (parallel tracking) */
+	dst_reg->var_range = wrange64_mul(dst_reg->var_range, src_reg->var_range);
+
+	/* Phase 4: Verify old and new tracking match */
+	wrange_verify_sync(dst_reg);
 }
 
 static void scalar32_min_max_and(struct bpf_reg_state *dst_reg,
