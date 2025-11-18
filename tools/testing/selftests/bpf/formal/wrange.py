@@ -6,6 +6,8 @@ from z3 import *
 # Helpers
 BitVec32 = lambda n: BitVec(n, bv=32)
 BitVecVal32 = lambda v: BitVecVal(v, bv=32)
+BitVec64 = lambda n: BitVec(n, bv=64)
+BitVecVal64 = lambda v: BitVecVal(v, bv=64)
 
 class Wrange(abc.ABC):
     SIZE = None # Bitwidth, this will be defined in the subclass
@@ -15,9 +17,9 @@ class Wrange(abc.ABC):
 
     def __init__(self, name, start=None, end=None):
         self.name = name
-        self.start = BitVec(f'Wrange32-{name}-start', bv=self.SIZE) if start is None else start
+        self.start = BitVec(f'Wrange{self.SIZE}-{name}-start', bv=self.SIZE) if start is None else start
         assert(self.start.size() == self.SIZE)
-        self.end = BitVec(f'Wrange32-{name}-end', bv=self.SIZE) if end is None else end
+        self.end = BitVec(f'Wrange{self.SIZE}-{name}-end', bv=self.SIZE) if end is None else end
         assert(self.end.size() == self.SIZE)
 
     def wellformed(self):
@@ -69,11 +71,18 @@ class Wrange32(Wrange):
     SIZE = 32 # Working with 32-bit integers
 
 
+class Wrange64(Wrange):
+    SIZE = 64 # Working with 64-bit integers
+
+
 __all__ = [
         'Wrange',
         'Wrange32',
+        'Wrange64',
         'BitVec32',
         'BitVecVal32',
+        'BitVec64',
+        'BitVecVal64',
 ]
 
 
