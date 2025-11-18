@@ -15168,6 +15168,12 @@ static void scalar32_min_max_and(struct bpf_reg_state *dst_reg,
 		dst_reg->s32_min_value = S32_MIN;
 		dst_reg->s32_max_value = S32_MAX;
 	}
+
+	/* Phase 4: Also update wrange32 field (parallel tracking) */
+	dst_reg->var32_range = wrange32_and(dst_reg->var32_range, src_reg->var32_range);
+
+	/* Phase 4: Verify old and new tracking match */
+	wrange_verify_sync(dst_reg);
 }
 
 static void scalar_min_max_and(struct bpf_reg_state *dst_reg,
@@ -15200,6 +15206,12 @@ static void scalar_min_max_and(struct bpf_reg_state *dst_reg,
 	}
 	/* We may learn something more from the var_off */
 	__update_reg_bounds(dst_reg);
+
+	/* Phase 4: Also update wrange fields (parallel tracking) */
+	dst_reg->var_range = wrange64_and(dst_reg->var_range, src_reg->var_range);
+
+	/* Phase 4: Verify old and new tracking match */
+	wrange_verify_sync(dst_reg);
 }
 
 static void scalar32_min_max_or(struct bpf_reg_state *dst_reg,
@@ -15231,6 +15243,12 @@ static void scalar32_min_max_or(struct bpf_reg_state *dst_reg,
 		dst_reg->s32_min_value = S32_MIN;
 		dst_reg->s32_max_value = S32_MAX;
 	}
+
+	/* Phase 4: Also update wrange32 field (parallel tracking) */
+	dst_reg->var32_range = wrange32_or(dst_reg->var32_range, src_reg->var32_range);
+
+	/* Phase 4: Verify old and new tracking match */
+	wrange_verify_sync(dst_reg);
 }
 
 static void scalar_min_max_or(struct bpf_reg_state *dst_reg,
@@ -15263,6 +15281,12 @@ static void scalar_min_max_or(struct bpf_reg_state *dst_reg,
 	}
 	/* We may learn something more from the var_off */
 	__update_reg_bounds(dst_reg);
+
+	/* Phase 4: Also update wrange fields (parallel tracking) */
+	dst_reg->var_range = wrange64_or(dst_reg->var_range, src_reg->var_range);
+
+	/* Phase 4: Verify old and new tracking match */
+	wrange_verify_sync(dst_reg);
 }
 
 static void scalar32_min_max_xor(struct bpf_reg_state *dst_reg,
@@ -15291,6 +15315,12 @@ static void scalar32_min_max_xor(struct bpf_reg_state *dst_reg,
 		dst_reg->s32_min_value = S32_MIN;
 		dst_reg->s32_max_value = S32_MAX;
 	}
+
+	/* Phase 4: Also update wrange fields (parallel tracking) */
+	dst_reg->var32_range = wrange32_xor(dst_reg->var32_range, src_reg->var32_range);
+
+	/* Phase 4: Verify old and new tracking match */
+	wrange_verify_sync(dst_reg);
 }
 
 static void scalar_min_max_xor(struct bpf_reg_state *dst_reg,
@@ -15321,6 +15351,12 @@ static void scalar_min_max_xor(struct bpf_reg_state *dst_reg,
 	}
 
 	__update_reg_bounds(dst_reg);
+
+	/* Phase 4: Also update wrange fields (parallel tracking) */
+	dst_reg->var_range = wrange64_xor(dst_reg->var_range, src_reg->var_range);
+
+	/* Phase 4: Verify old and new tracking match */
+	wrange_verify_sync(dst_reg);
 }
 
 static void __scalar32_min_max_lsh(struct bpf_reg_state *dst_reg,
@@ -15357,6 +15393,12 @@ static void scalar32_min_max_lsh(struct bpf_reg_state *dst_reg,
 	 */
 	__mark_reg64_unbounded(dst_reg);
 	__update_reg32_bounds(dst_reg);
+
+	/* Phase 4: Also update wrange fields (parallel tracking) */
+	dst_reg->var32_range = wrange32_lshift(dst_reg->var32_range, umin_val);
+
+	/* Phase 4: Verify old and new tracking match */
+	wrange_verify_sync(dst_reg);
 }
 
 static void __scalar64_min_max_lsh(struct bpf_reg_state *dst_reg,
@@ -15402,6 +15444,12 @@ static void scalar_min_max_lsh(struct bpf_reg_state *dst_reg,
 	dst_reg->var_off = tnum_lshift(dst_reg->var_off, umin_val);
 	/* We may learn something more from the var_off */
 	__update_reg_bounds(dst_reg);
+
+	/* Phase 4: Also update wrange fields (parallel tracking) */
+	dst_reg->var_range = wrange64_lshift(dst_reg->var_range, umin_val);
+
+	/* Phase 4: Verify old and new tracking match */
+	wrange_verify_sync(dst_reg);
 }
 
 static void scalar32_min_max_rsh(struct bpf_reg_state *dst_reg,
@@ -15434,6 +15482,12 @@ static void scalar32_min_max_rsh(struct bpf_reg_state *dst_reg,
 
 	__mark_reg64_unbounded(dst_reg);
 	__update_reg32_bounds(dst_reg);
+
+	/* Phase 4: Also update wrange fields (parallel tracking) */
+	dst_reg->var32_range = wrange32_rshift(dst_reg->var32_range, umin_val);
+
+	/* Phase 4: Verify old and new tracking match */
+	wrange_verify_sync(dst_reg);
 }
 
 static void scalar_min_max_rsh(struct bpf_reg_state *dst_reg,
@@ -15468,6 +15522,12 @@ static void scalar_min_max_rsh(struct bpf_reg_state *dst_reg,
 	 */
 	__mark_reg32_unbounded(dst_reg);
 	__update_reg_bounds(dst_reg);
+
+	/* Phase 4: Also update wrange fields (parallel tracking) */
+	dst_reg->var_range = wrange64_rshift(dst_reg->var_range, umin_val);
+
+	/* Phase 4: Verify old and new tracking match */
+	wrange_verify_sync(dst_reg);
 }
 
 static void scalar32_min_max_arsh(struct bpf_reg_state *dst_reg,
@@ -15491,6 +15551,12 @@ static void scalar32_min_max_arsh(struct bpf_reg_state *dst_reg,
 
 	__mark_reg64_unbounded(dst_reg);
 	__update_reg32_bounds(dst_reg);
+
+	/* Phase 4: Also update wrange fields (parallel tracking) */
+	dst_reg->var32_range = wrange32_arshift(dst_reg->var32_range, umin_val);
+
+	/* Phase 4: Verify old and new tracking match */
+	wrange_verify_sync(dst_reg);
 }
 
 static void scalar_min_max_arsh(struct bpf_reg_state *dst_reg,
@@ -15518,6 +15584,12 @@ static void scalar_min_max_arsh(struct bpf_reg_state *dst_reg,
 	 */
 	__mark_reg32_unbounded(dst_reg);
 	__update_reg_bounds(dst_reg);
+
+	/* Phase 4: Also update wrange fields (parallel tracking) */
+	dst_reg->var_range = wrange64_arshift(dst_reg->var_range, umin_val);
+
+	/* Phase 4: Verify old and new tracking match */
+	wrange_verify_sync(dst_reg);
 }
 
 static bool is_safe_to_compute_dst_reg_range(struct bpf_insn *insn,
